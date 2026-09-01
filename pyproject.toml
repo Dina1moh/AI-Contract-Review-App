@@ -1,0 +1,18 @@
+[project]
+name = "ai-contract-reviwe"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+	"cohere",
+	"fastapi",
+	"pandas",
+	"pdfplumber",
+	"python-dotenv",
+	"python-multipart",
+	"qdrant-client",
+	"requests",
+	"scikit-learn",
+	"uvicorn[standard]",
+]

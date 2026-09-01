@@ -1,0 +1,23 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+
+# Generated vector database
+chroma_db/
+
+# Raw / large datasets
+data/raw/
+
+# Logs
+*.log
