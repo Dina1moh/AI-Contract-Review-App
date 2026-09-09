@@ -96,9 +96,34 @@ def segment_document(file_path: Path) -> list[ClauseNode]:
     for block in parsed.blocks:
         by_page.setdefault(block.page_start, []).append(block.text)
     pages = _clean_pages(["\n".join(by_page[number]) for number in sorted(by_page)])
-    flattened = "\n\n".join(page for page in pages if page)
+    flattened_parts: list[str] = []
+    page_ranges: list[tuple[int, int, int]] = []
+    cursor = 0
+    for page_number, page in enumerate(pages, start=1):
+        if not page:
+            continue
+        start = cursor
+        flattened_parts.append(page)
+        cursor += len(page)
+        page_ranges.append((start, cursor, page_number))
+        flattened_parts.append("\n\n")
+        cursor += 2
+    flattened = "".join(flattened_parts)
     clauses = split_into_clauses(flattened)
     page_spans: list[tuple[int | None, int | None]] = []
+    search_from = 0
     for clause in clauses:
-        page_spans.append((None, None))
+        position = flattened.find(clause[: min(120, len(clause))], search_from)
+        if position < 0:
+            position = search_from
+        end = position + len(clause)
+        covered = [
+            page
+            for start, stop, page in page_ranges
+            if start < end and stop > position
+        ]
+        page_spans.append(
+            (min(covered) if covered else None, max(covered) if covered else None)
+        )
+        search_from = max(search_from + 1, end)
     return _build_nodes(clauses, page_spans, parsed.parser)

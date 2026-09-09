@@ -38,6 +38,7 @@ def test_text_document_uses_text_parser_and_keeps_same_line_boundaries(tmp_path:
     nodes = segment_document(source)
     assert [node.clause_number for node in nodes] == ["1.", "2."]
     assert all(node.parser == "text" for node in nodes)
+    assert all(node.page_start == 1 and node.page_end == 1 for node in nodes)
 
 
 def test_signature_metadata_is_marked_without_being_classified():
