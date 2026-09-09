@@ -12,6 +12,7 @@ from .retriever import make_qdrant_client, retrieve_similar
 from .generator import classify_clause
 from .prompt import build_prompt, load_label_definitions, DEFAULT_LABEL_DEFINITIONS
 from .segmenter import extract_text, split_into_clauses
+from .clause_segmenter import ClauseNode, segment_document
 
 __all__ = [
     "make_cohere_client",
@@ -24,4 +25,6 @@ __all__ = [
     "DEFAULT_LABEL_DEFINITIONS",
     "extract_text",
     "split_into_clauses",
+    "ClauseNode",
+    "segment_document",
 ]

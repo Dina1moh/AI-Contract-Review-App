@@ -4,7 +4,7 @@ Application service layer for contract classification.
 Ties together the RAG building blocks in core/rag/ into the full pipeline:
 
     uploaded contract (PDF/.txt)
-        -> segmenter.extract_text + split_into_clauses
+        -> structured hybrid parser + contract-aware clause segmenter
         -> embedder.embed_queries          (Cohere, batched)
         -> per clause: generator.classify_clause
                (internally calls retriever.retrieve_similar)
@@ -29,9 +29,8 @@ from ..core.rag import (
     make_qdrant_client,
     classify_clause,
     load_label_definitions,
-    extract_text,
-    split_into_clauses,
 )
+from ..core.rag.clause_segmenter import segment_document
 from ..core.rag.segmenter import is_definition
 from ..core.rag.validator import is_real_clause
 from ..core.risk import detect_clause_risk
@@ -102,13 +101,19 @@ def _classify_contract(
         ValueError: no clauses could be extracted from the document.
         RuntimeError: an upstream dependency (Cohere, Qdrant, Ollama) failed.
     """
-    _emit(progress_callback, "extract", "Extracting text from the document")
-    raw_text = extract_text(file_path)
-    _emit(progress_callback, "extract", "Text extraction complete", characters=len(raw_text))
+    _emit(progress_callback, "extract", "Extracting document structure")
+    segments = segment_document(file_path)
+    _emit(
+        progress_callback,
+        "extract",
+        "Document structure extracted",
+        parser=segments[0].parser if segments else None,
+        total_blocks=len(segments),
+    )
 
-    _emit(progress_callback, "segment", "Splitting the document into clauses")
-    clauses = split_into_clauses(raw_text)
-    _emit(progress_callback, "segment", "Clause splitting complete", total=len(clauses))
+    _emit(progress_callback, "segment", "Detecting contract clause boundaries")
+    clauses = [segment.text for segment in segments]
+    _emit(progress_callback, "segment", "Clause segmentation complete", total=len(clauses))
 
     if not clauses:
         raise ValueError(
@@ -124,7 +129,7 @@ def _classify_contract(
     cohere_client = make_cohere_client()
     qdrant_client = make_qdrant_client()
 
-    # Lightweight validation pass: catch regex mis-splits (stray fragments,
+    # Lightweight validation pass: catch boundary errors (stray fragments,
     # footnote-like remnants the pattern-based filter missed) BEFORE
     # spending a Cohere embedding call + Qdrant lookup + full classification
     # prompt on something that isn't actually a clause. See validator.py
@@ -138,6 +143,20 @@ def _classify_contract(
 
     _emit(progress_callback, "validate", "Validating extracted clauses", total=len(clauses))
     for index, clause_text in enumerate(clauses):
+        if segments[index].metadata.get("is_signature_metadata"):
+            results.append(
+                _with_risk_fields(
+                    {
+                        "clause_index": index,
+                        "clause_text": clause_text,
+                        "predicted_label": "DOCUMENT_METADATA",
+                        "retrieved_labels": [],
+                        "retrieved_scores": [],
+                    },
+                    _default_risk("Signature or document metadata; classification skipped."),
+                )
+            )
+            continue
         if is_real_clause(clause_text):
             validated.append((index, clause_text))
         else:

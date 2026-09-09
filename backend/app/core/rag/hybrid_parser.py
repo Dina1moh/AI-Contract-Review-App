@@ -6,7 +6,33 @@ runtime conversion errors and use the pdfplumber fallback.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+import logging
+import os
 from pathlib import Path
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DocumentBlock:
+    """One ordered, page-aware element from the document parser."""
+
+    text: str
+    page_start: int
+    page_end: int
+    kind: str = "text"
+    order: int = 0
+
+
+@dataclass
+class ParsedDocument:
+    """Structured parser output consumed by the clause segmenter."""
+
+    blocks: list[DocumentBlock] = field(default_factory=list)
+    parser: str = "unknown"
+    fallback_reason: str | None = None
 
 
 def _text(item: object) -> str:
@@ -28,12 +54,7 @@ def _pages(item: object) -> list[int]:
     return result
 
 
-def extract_docling_pages(file_path: Path) -> list[str]:
-    """Return Docling's ordered text grouped by source page.
-
-    Tables are retained as blocks, but their rows are not treated as clauses;
-    deterministic segmentation remains responsible for legal boundaries.
-    """
+def _docling_document(file_path: Path) -> ParsedDocument:
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions
     from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -48,25 +69,71 @@ def extract_docling_pages(file_path: Path) -> list[str]:
         },
     )
     document = converter.convert(str(file_path)).document
-
-    blocks: list[tuple[int, int, str]] = []
-    for order, item in enumerate(getattr(document, "texts", []) or []):
+    blocks: list[DocumentBlock] = []
+    items = list(getattr(document, "texts", []) or [])
+    tables = list(getattr(document, "tables", []) or [])
+    for order, item in enumerate(items + tables):
         value = _text(item)
         pages = _pages(item)
         if value and pages:
-            blocks.append((min(pages), order, value))
-    for order, item in enumerate(
-        getattr(document, "tables", []) or [], start=len(blocks)
-    ):
-        value = _text(item)
-        pages = _pages(item)
-        if value and pages:
-            blocks.append((min(pages), order, value))
+            label = "table" if order >= len(items) else "text"
+            blocks.append(
+                DocumentBlock(value, min(pages), max(pages), label, order)
+            )
+    return ParsedDocument(sorted(blocks, key=lambda block: block.order), "docling")
 
-    if not blocks:
+
+def _pdfplumber_document(file_path: Path, reason: str | None = None) -> ParsedDocument:
+    import pdfplumber
+
+    blocks: list[DocumentBlock] = []
+    with pdfplumber.open(file_path) as pdf:
+        for page_number, page in enumerate(pdf.pages, start=1):
+            text = page.extract_text() or ""
+            if text.strip():
+                blocks.append(DocumentBlock(text, page_number, page_number, "fallback", page_number))
+    return ParsedDocument(blocks, "pdfplumber-fallback", reason)
+
+
+def parse_document(file_path: Path) -> ParsedDocument:
+    """Parse PDF structure with Docling and use an explicit local fallback."""
+    if file_path.suffix.lower() == ".txt":
+        return ParsedDocument(
+            [DocumentBlock(file_path.read_text(encoding="utf-8", errors="ignore"), 1, 1, "text", 0)],
+            "text",
+        )
+    if file_path.suffix.lower() != ".pdf":
+        raise ValueError(f"Unsupported file type: {file_path.suffix}")
+    mode = os.getenv("CONTRACT_PARSER", "hybrid").strip().lower()
+    if mode not in {"hybrid", "docling", "regex"}:
+        raise ValueError("CONTRACT_PARSER must be hybrid, docling, or regex")
+    if mode == "regex":
+        return _pdfplumber_document(file_path, "CONTRACT_PARSER=regex")
+    try:
+        parsed = _docling_document(file_path)
+        if parsed.blocks:
+            return parsed
+        raise RuntimeError("Docling returned no structured document blocks")
+    except Exception as exc:
+        if mode == "docling":
+            raise RuntimeError(
+                "Docling parser requested but unavailable or unable to parse the PDF."
+            ) from exc
+        LOGGER.warning("Docling parsing failed for %s; using pdfplumber fallback: %s", file_path, exc)
+        return _pdfplumber_document(file_path, str(exc))
+
+
+def extract_docling_pages(file_path: Path) -> list[str]:
+    """Return Docling's ordered text grouped by source page.
+
+    Tables are retained as blocks, but their rows are not treated as clauses;
+    deterministic segmentation remains responsible for legal boundaries.
+    """
+    parsed = _docling_document(file_path)
+    if not parsed.blocks:
         return []
-    last_page = max(page for page, _, _ in blocks)
+    last_page = max(block.page_end for block in parsed.blocks)
     pages = [[] for _ in range(last_page)]
-    for page, order, value in sorted(blocks, key=lambda block: (block[1], block[0])):
-        pages[page - 1].append(value)
+    for block in parsed.blocks:
+        pages[block.page_start - 1].append(block.text)
     return ["\n".join(page) for page in pages]

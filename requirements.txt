@@ -11,6 +11,12 @@ requests               # calls to Ollama's /api/generate
 # --- Contract text extraction ---
 pdfplumber             # PDF -> text extraction (segmenter.py)
 
+# Local PDF structure extraction for the production hybrid parser. The
+# deterministic clause boundary layer remains in app/core/rag/segmenter.py.
+docling-slim==2.126.0
+docling-parse==7.18.0
+rtree==1.4.1
+
 # --- Config / environment ---
 python-dotenv           # loads .env (COHERE_API_KEY, QDRANT_URL, etc.)
 

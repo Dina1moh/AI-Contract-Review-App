@@ -10,11 +10,9 @@ lines.
 from __future__ import annotations
 
 import difflib
-import os
 import re
 from pathlib import Path
 
-import pdfplumber
 
 
 HEADER_FOOTER_MIN_PAGE_FRACTION = 0.5
@@ -41,6 +39,11 @@ SECTION_MARKER_RE = re.compile(
 )
 PAREN_MARKER_RE = re.compile(
     r"(?<!\w)(?P<marker>\((?:[a-z]|[ivx]{1,6})\))"
+    r"\s+(?=[\"\u201c\u2018'A-Z(])",
+    re.IGNORECASE,
+)
+COMPOUND_PAREN_MARKER_RE = re.compile(
+    r"(?<![\w.])(?P<marker>\d+\s*\((?:[a-z]|[ivx]{1,6})\))"
     r"\s+(?=[\"\u201c\u2018'A-Z(])",
     re.IGNORECASE,
 )
@@ -118,6 +121,8 @@ def _is_structural_start(line: str) -> bool:
         re.IGNORECASE,
     ):
         return False
+    if COMPOUND_PAREN_MARKER_RE.match(line):
+        return True
     if SECTION_HEADER_RE.match(line):
         return True
     if NUMBERED_MARKER_RE.match(line) or PAREN_MARKER_RE.match(line):
@@ -145,6 +150,22 @@ def is_footnote(text: str) -> bool:
 def is_definition(text: str) -> bool:
     """Return whether text begins with a defined-term entry."""
     return bool(DEFINITION_RE.match(_normalize_line(text)))
+
+
+def _marker_for_text(text: str) -> str | None:
+    """Return a leading legal marker for hierarchy and diagnostics."""
+    normalized = _normalize_line(text)
+    for pattern in (
+        COMPOUND_PAREN_MARKER_RE,
+        SECTION_MARKER_RE,
+        NUMBERED_MARKER_RE,
+        PAREN_MARKER_RE,
+    ):
+        match = pattern.match(normalized)
+        if match:
+            marker = match.groupdict().get("marker")
+            return marker.strip() if marker else match.group(0).strip()
+    return None
 
 
 def _normalize_header_key(line: str) -> str:
@@ -275,29 +296,16 @@ def _clean_pages(pages: list[str]) -> list[str]:
 
 def extract_page_layers(file_path: Path) -> dict[str, list[str]]:
     """Return raw and cleaned page text for diagnostics and internal use."""
-    suffix = file_path.suffix.lower()
-    if suffix == ".txt":
-        raw_pages = [file_path.read_text(encoding="utf-8", errors="ignore")]
-    elif suffix == ".pdf":
-        parser_mode = os.getenv("CONTRACT_PARSER", "hybrid").strip().lower()
-        if parser_mode not in {"hybrid", "docling", "regex"}:
-            raise ValueError("CONTRACT_PARSER must be hybrid, docling, or regex")
-        raw_pages = []
-        if parser_mode in {"hybrid", "docling"}:
-            try:
-                from .hybrid_parser import extract_docling_pages
+    from .hybrid_parser import parse_document
 
-                raw_pages = extract_docling_pages(file_path)
-            except Exception as exc:
-                if parser_mode == "docling":
-                    raise RuntimeError(
-                        "Docling parser requested but unavailable or unable to parse the PDF."
-                    ) from exc
-        if not raw_pages:
-            with pdfplumber.open(file_path) as pdf:
-                raw_pages = [page.extract_text() or "" for page in pdf.pages]
-    else:
-        raise ValueError(f"Unsupported file type: {suffix}. Use a .pdf or .txt file.")
+    parsed = parse_document(file_path)
+    raw_pages_by_number: dict[int, list[str]] = {}
+    for block in parsed.blocks:
+        raw_pages_by_number.setdefault(block.page_start, []).append(block.text)
+    raw_pages = [
+        "\n".join(raw_pages_by_number[number])
+        for number in sorted(raw_pages_by_number)
+    ]
     return {"raw_pages": raw_pages, "cleaned_pages": _clean_pages(raw_pages)}
 
 
@@ -334,10 +342,17 @@ def _split_line_at_markers(line: str) -> list[str]:
             re.search(r"(?:section|article|clause)\s*$", prefix.rstrip(), re.IGNORECASE)
         )
         if not is_cross_reference and (
-            is_subsection or match.start() == 0 or _enumeration_context(prefix)
+            is_subsection
+            or match.start() == 0
+            or _enumeration_context(prefix)
+            or prefix.rstrip().endswith((".", ";", ":"))
         ):
             positions.add(match.start())
     for match in COMPACT_NUMBERED_MARKER_RE.finditer(line):
+        prefix = line[: match.start()].rstrip()
+        if match.start() == 0 or prefix.endswith((".", ";", ":")):
+            positions.add(match.start())
+    for match in COMPOUND_PAREN_MARKER_RE.finditer(line):
         prefix = line[: match.start()].rstrip()
         if match.start() == 0 or prefix.endswith((".", ";", ":")):
             positions.add(match.start())

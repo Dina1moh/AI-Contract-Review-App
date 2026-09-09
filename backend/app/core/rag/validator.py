@@ -1,9 +1,9 @@
 """
 Lightweight validation pass over segmenter.py's output.
 
-The regex-based segmentation in segmenter.py is a heuristic and can
-occasionally mis-split text (e.g. a stray sentence fragment from a
-multi-line ALL-CAPS clause getting treated as its own "clause" -- see the
+The deterministic contract boundary layer can occasionally mis-split text
+(e.g. a stray sentence fragment from a multi-line ALL-CAPS clause getting
+treated as its own "clause" -- see the
 "GIVING RISE TO LIABILITY." case discussed while testing on real CUAD
 contracts).
 
