@@ -31,6 +31,16 @@ def test_numbered_clauses_split_at_line_starts() -> None:
     assert [clause.split()[0] for clause in clauses] == ["2.1", "2.2", "2.3"]
 
 
+def test_compact_numbered_clauses_split_after_sentence_boundaries() -> None:
+    text = (
+        "1.Party A shall provide the services described in this agreement. "
+        "2.Period of service is indefinite. 3.Freight is paid monthly."
+    )
+    clauses = split_into_clauses(text)
+    assert len(clauses) == 3
+    assert [clause.split()[0] for clause in clauses] == ["1.", "2.", "3."]
+
+
 def test_inline_enumeration_splits_when_context_is_explicit() -> None:
     text = (
         "The following applies: (a) The first obligation is sufficiently detailed "

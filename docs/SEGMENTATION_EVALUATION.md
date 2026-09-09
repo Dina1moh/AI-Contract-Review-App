@@ -2,10 +2,10 @@
 
 ## Executive summary
 
-This is an evaluation branch, not a production migration. The production RAG
-service remains wired to `pdfplumber` plus the existing deterministic
-segmenter; no CUAD, Cohere, Qdrant, Ollama, risk, API, or frontend interfaces
-were changed.
+The production RAG service now uses the hybrid parser mode by default. Docling
+is optional; when it is unavailable or fails, extraction falls back to
+`pdfplumber` plus the deterministic segmenter. No CUAD, Cohere, Qdrant, Ollama,
+risk, API, or frontend interfaces were changed.
 
 The required representative document is:
 
@@ -18,23 +18,26 @@ clauses and subclauses across page breaks. This is a parsing/normalization
 problem as well as a boundary-rule problem; it is not evidence that a paid LLM
 is needed.
 
-Docling was isolated behind an optional adapter in
-`backend/app/core/rag/segmentation_evaluation.py`. It was not installed in the
-available environment, so Docling and hybrid measurements are explicitly
-reported as unavailable. No Docling accuracy or performance result is claimed.
+Docling is isolated behind an optional adapter in
+`backend/app/core/rag/hybrid_parser.py`; the evaluation adapter remains in
+`backend/app/core/rag/segmentation_evaluation.py`. It was not installed in
+the available environment, so benchmark measurements for Docling and hybrid
+are explicitly reported as unavailable. No Docling accuracy or performance
+result is claimed.
 
-**Decision for this phase: do not replace Regex.** The evidence supports a
-future hybrid experiment, but is insufficient to select Docling or hybrid as
-the winner. The next run must install the optional dependencies and manually
-review the same document's outputs before any production migration.
+**Decision:** apply Hybrid with a safe Regex fallback. The benchmark evidence
+does not prove Docling improves accuracy yet, so the fallback remains the
+reliable production path until the optional parser is installed and manually
+validated on the same document.
 
 ## Current architecture
 
 The production path is:
 
-`PDF upload -> pdfplumber page extraction -> page cleanup -> deterministic
-clause splitting -> clause validation -> Cohere embeddings -> Qdrant/CUAD
-classification -> risk analysis -> API/frontend response`
+`PDF upload -> Docling page/structure extraction when available -> deterministic
+cleanup and clause splitting -> pdfplumber fallback if needed -> clause
+validation -> Cohere embeddings -> Qdrant/CUAD classification -> risk analysis
+-> API/frontend response`
 
 Clauses currently flow downstream as plain strings. The public extraction API
 is unchanged: `extract_text(Path) -> str` and
@@ -148,14 +151,16 @@ labels on the target PDF.
 
 ## Recommendation
 
-Keep the current Regex implementation for production during this evaluation
-phase. Do not merge a Docling replacement based on the available evidence.
+Use the Hybrid implementation now, with `CONTRACT_PARSER=hybrid` as the
+default. It keeps deterministic rules in charge of legal boundaries and does
+not make the application depend on Docling being installed. Set
+`CONTRACT_PARSER=regex` to force the legacy path. Set
+`CONTRACT_PARSER=docling` only where Docling is installed and a hard failure is
+preferred over fallback.
 
-The most promising next architecture is hybrid, subject to a completed A/B/C
-run. A hybrid should be accepted only if manual review demonstrates fewer
-merged/split clauses, correct reading order, retained numbering, and no
-unacceptable table or footnote contamination on the target plus additional
-representative PDFs, while its local resource cost remains acceptable.
+This is an integration improvement, not a proven accuracy improvement. The
+missing Docling run and labeled/manual review are still required before making
+accuracy claims.
 
 ## Migration plan after successful evaluation
 
@@ -166,8 +171,8 @@ representative PDFs, while its local resource cost remains acceptable.
    layout variants.
 3. Add fixture-based tests for every observed failure before changing the
    production service.
-4. If hybrid wins, add an explicit feature flag and fallback to the current
-   Regex path when Docling fails or produces low-validation output.
+4. Keep the explicit parser mode and fallback; add a low-validation fallback
+   if real-world monitoring identifies poor Docling output.
 5. Convert normalized records to the existing `clause_text` strings at the
    service boundary so CUAD/RAG/risk/API/frontend behavior remains unchanged.
 6. Benchmark cold start, warm processing time, memory, image-only/OCR cases,

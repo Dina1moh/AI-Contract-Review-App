@@ -1,13 +1,12 @@
 """Isolated A/B/C evaluation prototype for contract segmentation.
 
-This module is intentionally not imported by the production RAG service.  It
-provides three comparable representations:
+This module provides three comparable representations:
 
 * ``regex``: the current pdfplumber and deterministic segmenter;
 * ``docling``: Docling's ordered document items and paragraph/heading
   boundaries, without applying the production regex splitter;
-* ``hybrid``: Docling's ordered, page-aware blocks followed by the existing
-  deterministic boundary rules.
+* ``hybrid``: Docling's ordered, page-aware blocks followed by deterministic
+  boundary rules.
 
 Docling is an optional evaluation dependency.  Keeping the import inside the
   Docling adapter means the production application remains installable and

@@ -10,6 +10,7 @@ lines.
 from __future__ import annotations
 
 import difflib
+import os
 import re
 from pathlib import Path
 
@@ -42,6 +43,9 @@ PAREN_MARKER_RE = re.compile(
     r"(?<!\w)(?P<marker>\((?:[a-z]|[ivx]{1,6})\))"
     r"\s+(?=[\"\u201c\u2018'A-Z(])",
     re.IGNORECASE,
+)
+COMPACT_NUMBERED_MARKER_RE = re.compile(
+    r"(?<![\w.])(?P<marker>\d{1,3}\.)(?=[\"\u201c\u2018'A-Z(])"
 )
 
 # Compatibility constant for code that imported the old matcher.
@@ -275,10 +279,23 @@ def extract_page_layers(file_path: Path) -> dict[str, list[str]]:
     if suffix == ".txt":
         raw_pages = [file_path.read_text(encoding="utf-8", errors="ignore")]
     elif suffix == ".pdf":
+        parser_mode = os.getenv("CONTRACT_PARSER", "hybrid").strip().lower()
+        if parser_mode not in {"hybrid", "docling", "regex"}:
+            raise ValueError("CONTRACT_PARSER must be hybrid, docling, or regex")
         raw_pages = []
-        with pdfplumber.open(file_path) as pdf:
-            for page in pdf.pages:
-                raw_pages.append(page.extract_text() or "")
+        if parser_mode in {"hybrid", "docling"}:
+            try:
+                from .hybrid_parser import extract_docling_pages
+
+                raw_pages = extract_docling_pages(file_path)
+            except (ImportError, RuntimeError, ValueError):
+                if parser_mode == "docling":
+                    raise RuntimeError(
+                        "Docling parser requested but unavailable or unable to parse the PDF."
+                    )
+        if not raw_pages:
+            with pdfplumber.open(file_path) as pdf:
+                raw_pages = [page.extract_text() or "" for page in pdf.pages]
     else:
         raise ValueError(f"Unsupported file type: {suffix}. Use a .pdf or .txt file.")
     return {"raw_pages": raw_pages, "cleaned_pages": _clean_pages(raw_pages)}
@@ -319,6 +336,10 @@ def _split_line_at_markers(line: str) -> list[str]:
         if not is_cross_reference and (
             is_subsection or match.start() == 0 or _enumeration_context(prefix)
         ):
+            positions.add(match.start())
+    for match in COMPACT_NUMBERED_MARKER_RE.finditer(line):
+        prefix = line[: match.start()].rstrip()
+        if match.start() == 0 or prefix.endswith((".", ";", ":")):
             positions.add(match.start())
     for match in SECTION_MARKER_RE.finditer(line):
         starts_cross_reference = bool(
