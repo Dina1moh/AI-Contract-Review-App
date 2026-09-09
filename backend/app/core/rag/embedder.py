@@ -28,10 +28,12 @@ def make_cohere_client() -> cohere.ClientV2:
     return cohere.ClientV2(api_key=COHERE_API_KEY)
 
 
-def embed_queries(cohere_client: cohere.ClientV2, texts: list[str]) -> list[list[float]]:
-    """Batch-embed query texts (clauses), with retry/backoff on Cohere 429s
-    so a long contract with many clauses doesn't die on a rate limit.
-    """
+def embed_texts(
+    cohere_client: cohere.ClientV2,
+    texts: list[str],
+    input_type: str,
+) -> list[list[float]]:
+    """Batch-embed texts with the configured Cohere model and retry policy."""
     all_embeddings: list[list[float]] = []
 
     for start in range(0, len(texts), COHERE_EMBED_BATCH_SIZE):
@@ -43,7 +45,7 @@ def embed_queries(cohere_client: cohere.ClientV2, texts: list[str]) -> list[list
             try:
                 response = cohere_client.embed(
                     model=COHERE_MODEL,
-                    input_type="search_query",
+                    input_type=input_type,
                     texts=batch,
                     embedding_types=["float"],
                 )
@@ -65,3 +67,15 @@ def embed_queries(cohere_client: cohere.ClientV2, texts: list[str]) -> list[list
         all_embeddings.extend(response.embeddings.float)
 
     return all_embeddings
+
+
+def embed_queries(cohere_client: cohere.ClientV2, texts: list[str]) -> list[list[float]]:
+    """Batch-embed query texts (clauses), with retry/backoff on Cohere 429s
+    so a long contract with many clauses doesn't die on a rate limit.
+    """
+    return embed_texts(cohere_client, texts, input_type="search_query")
+
+
+def embed_documents(cohere_client: cohere.ClientV2, texts: list[str]) -> list[list[float]]:
+    """Batch-embed stored knowledge documents into the same embedding space."""
+    return embed_texts(cohere_client, texts, input_type="search_document")

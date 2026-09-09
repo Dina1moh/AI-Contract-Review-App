@@ -119,9 +119,126 @@ body {
   margin-bottom: 10px;
 }
 
+.trace {
+  margin-top: 24px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  font-family: system-ui, sans-serif;
+}
+
+.trace-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
+}
+
+.trace-header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.trace-header span {
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.trace-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.trace-item {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 7px 0;
+  color: #45515f;
+  font-size: 0.86rem;
+  border-bottom: 1px solid #f0eee9;
+}
+
+.trace-stage {
+  min-width: 112px;
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.trace-item--error,
+.trace-item--error .trace-stage {
+  color: #a33;
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 16px 0 4px;
+  color: #45515f;
+  font-family: system-ui, sans-serif;
+  font-size: 0.85rem;
+}
+
+.risk-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 3px 10px;
+  border-radius: 3px;
+  font-family: system-ui, sans-serif;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.risk-badge--risk {
+  background: #fbeaea;
+  color: #a33;
+}
+
+.risk-badge--clear {
+  background: #eef4f1;
+  color: #47645a;
+}
+
+.risk-badge--unsupported {
+  background: #f1eee8;
+  color: #756b5c;
+}
+
+.risk-type {
+  margin: 0 0 10px;
+  color: #a33;
+  font-family: system-ui, sans-serif;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
 .clause-text {
   margin: 0;
   line-height: 1.55;
+}
+
+.risk-detail {
+  margin-top: 10px;
+  color: #45515f;
+  font-family: system-ui, sans-serif;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.risk-detail a {
+  color: var(--accent);
 }
 
 details {
@@ -139,4 +256,15 @@ summary {
   margin: 8px 0 0;
   padding-left: 18px;
   color: #5a6472;
+}
+
+.guidance-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #5a6472;
+  line-height: 1.45;
+}
+
+.guidance-list li {
+  margin-bottom: 10px;
 }

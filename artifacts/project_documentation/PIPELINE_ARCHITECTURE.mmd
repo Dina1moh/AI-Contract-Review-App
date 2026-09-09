@@ -1,0 +1,32 @@
+flowchart TD
+  UI[React frontend\nfrontend/src/App.jsx] -->|multipart/form-data file| API[FastAPI\nPOST /documents/classify]
+  API --> TMP[NamedTemporaryFile\nlocal temp path]
+  TMP --> EXT[segmenter.extract_text\npdfplumber PDF or UTF-8 TXT]
+  EXT --> SEG[split_into_clauses\nregex/paragraph heuristic]
+  SEG --> VAL[validator.is_real_clause\nOllama yes/no; fail-open]
+  VAL --> EMBQ[Cohere embed_queries\nsearch_query, batch]
+  EMBQ --> CUADRET[Qdrant retrieve_similar\nfilter is_metadata != true]
+  CUADRET --> CLASS[generator.classify_clause\nfeatures + prompt + Ollama]
+  CLASS --> LRET[legal_knowledge.retriever\ncategory filter + Cohere query embedding]
+  LRET --> LQ[(Qdrant legal_knowledge\n30 points observed)]
+  LRET --> RISK[risk_detector.detect_clause_risk\nindicators + guidance + Ollama]
+  CLASS --> RISK
+  RISK --> SCHEMA[ClauseResult / ContractClassificationResponse]
+  SCHEMA --> RESP[JSON API response]
+  RESP --> UI
+  CSTORE[(Qdrant cuad_train\n7004 points observed)] --> CUADRET
+
+  subgraph Offline_CUAD_Ingestion
+    RAW[CUAD source / split CSV] --> SPLIT[data/scripts/dataset/split_cuad.py]
+    SPLIT --> ET[data/scripts/embedding/embed_train.py]
+    ET --> EFILES[data/embeddings/train_embeddings.json\ntrain_metadata.jsonl]
+    EFILES --> BUILD[data/scripts/embedding/build_qdrant.py]
+    BUILD --> CSTORE
+  end
+
+  subgraph Offline_Legal_Ingestion
+    LFILES[backend/data/legal_knowledge/**/*.md] --> LING[app.core.legal_knowledge.ingest]
+    LING --> LCHUNK[chunk_text\n1200 chars / 150 overlap]
+    LCHUNK --> LEMB[Cohere embed_documents\nsearch_document]
+    LEMB --> LQ
+  end

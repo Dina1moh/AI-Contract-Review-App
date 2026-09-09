@@ -1,325 +1,439 @@
-"""
-Splits an uploaded contract (PDF or .txt) into individual clauses so each
-one can be classified by generator.classify_clause().
+"""Page-aware PDF extraction and structure-aware contract segmentation.
 
-This is new logic -- not present in the original single-clause classifier
-scripts, since those assumed the clause text was already isolated (one row
-from the CUAD test CSV).
-
-Install (one-time):
-    pip install pdfplumber
+The public API remains ``extract_text(Path) -> str`` and
+``split_into_clauses(str) -> list[str]``. Internally, PDF pages are cleaned
+before they are flattened so page furniture cannot be mistaken for contract
+text and structural markers can be recognized in the middle of extracted
+lines.
 """
 
 from __future__ import annotations
 
-import re
 import difflib
+import re
 from pathlib import Path
 
 import pdfplumber
 
 
-# Matches common numbered-section headers, e.g.:
-#   "1. Definitions"   "1.1 Term"   "Section 3."   "ARTICLE IV"   "(a) Termination"
-# Requires a period (or paren/word) immediately after the number, which is
-# what distinguishes a real clause number from a footnote marker below.
-SECTION_HEADER_RE = re.compile(
-    r"""
-    ^\s*
-    (?:
-        \d+(?:\.\d+)*\.?          # 1.  or 1.1  or 1.1.2
-        | \([a-zA-Z]\)            # (a)
-        | [A-Z][A-Za-z]*\s+\d+    # Section 3 / Article IV (arabic numeral)
-        | (?:ARTICLE|SECTION)\s+[IVXLCDM]+\b   # ARTICLE IV / SECTION XII (roman numeral)
-    )
-    \s+\S
-    """,
-    re.VERBOSE | re.IGNORECASE,
-)
+HEADER_FOOTER_MIN_PAGE_FRACTION = 0.5
+MIN_CLAUSE_CHARS = 40
+LONG_CLAUSE_FALLBACK_THRESHOLD = 3000
 
-# ALL-CAPS section titles with no leading number at all, e.g.
-#   "TERM AND TERMINATION"   "CONFIDENTIALITY"   "LIMITATION OF LIABILITY"
-# Common in contracts that don't use decimal numbering (confirmed cause of
-# a 22,000+ char under-split clause seen in a real Franchise agreement
-# sample).
-#
-# RISK: multi-line ALL-CAPS legal boilerplate (liability disclaimers,
-# warranty waivers -- exactly the text behind CUAD labels like "Uncapped
-# Liability" / "Cap On Liability") also gets extracted as consecutive
-# short ALL-CAPS lines. A loose pattern here would wrongly split those
-# clauses apart. Mitigations:
-#   - max 6 words (real titles are short; boilerplate sentence fragments
-#     that happen to be short are rarer but not impossible)
-#   - must NOT end in a comma (mid-sentence lines end there)
-#   - must NOT contain digits (boilerplate clauses reference section
-#     numbers like "SECTION 11.3"; titles don't)
-# This reduces but does not eliminate false positives -- verify against
-# real liability/warranty clauses before trusting this in production.
-ALL_CAPS_HEADER_RE = re.compile(
-    r"^\s*(?:[A-Z][A-Z&/-]*\s+){0,5}[A-Z][A-Z&/-]*\.?\s*$"
-)
-
-
-def _looks_like_all_caps_title(line: str) -> bool:
-    stripped = line.strip()
-    if not ALL_CAPS_HEADER_RE.match(stripped):
-        return False
-    if any(ch.isdigit() for ch in stripped):
-        return False  # boilerplate referencing "SECTION 11.3" etc.
-    if len(stripped) < 6:
-        return False  # too short to be a meaningful title
-    return True
-
-# Footnote markers: a bare 1-2 digit number, a space, then a capital letter
-# -- NO period after the digits. Real clause numbers always have a period
-# (or are wrapped in parens) immediately after the digit(s), e.g. "1." or
-# "1.1", so this pattern only matches drafting-note footnotes like
-# "1 This form is fairly generic..." or "20 Pre-approved subcontractors
-# should be included." Confirmed against the actual Cooley SaaS template,
-# which places these as numbered notes separate from the numbered clauses.
-FOOTNOTE_LINE_RE = re.compile(r"^\d{1,2}\s+[A-Z]")
-
-# Definition entries inside a "1. DEFINITIONS." section, e.g.:
-#   1.1 "Affiliate" means, with respect to any entity, ...
-# CUAD's 41 labels don't include a "definitions" category, so forcing one
-# of these into a substantive label (License Grant, Uncapped Liability,
-# etc.) is always wrong. Detected so callers can route them to a fixed
-# DEFINITION bucket instead of the classifier -- see is_definition().
-DEFINITION_RE = re.compile(
-    r'^\d+\.\d+\s+(?:["\u201c][^"\u201d]{1,120}["\u201d](?:\s*(?:or|and|,)\s*["\u201c][^"\u201d]{1,120}["\u201d])*)\s+(?:means|has the meaning)\b',
+PAGE_NUMBER_RE = re.compile(
+    r"^\s*(?:page\s+)?\d{1,4}(?:\s+of\s+\d{1,4})?\s*$",
     re.IGNORECASE,
 )
 
-# Running header/footer text repeated on (almost) every page, e.g. a firm's
-# "this is not legal advice" disclaimer. Detected by frequency across pages
-# rather than hardcoded, so this generalizes to other templates.
-HEADER_FOOTER_MIN_PAGE_FRACTION = 0.5
+# Structural markers are deliberately conservative about the text following
+# a marker. This avoids treating ordinary prose such as "there are 2 parties"
+# as a clause boundary.
+NUMBERED_MARKER_RE = re.compile(
+    r"(?<![\w.])(?P<marker>\d+(?:\.\d+)+\.?|\d{1,3}\.)"
+    r"\s+(?=[\"\u201c\u2018'A-Z(])"
+)
+SECTION_MARKER_RE = re.compile(
+    r"(?<!\w)(?P<marker>(?:SECTION|ARTICLE)\s+"
+    r"(?:\d+(?:\.\d+)*|[IVXLCDM]+)\.?)\s+"
+    r"(?=[\"\u201c\u2018'A-Z(])",
+    re.IGNORECASE,
+)
+PAREN_MARKER_RE = re.compile(
+    r"(?<!\w)(?P<marker>\((?:[a-z]|[ivx]{1,6})\))"
+    r"\s+(?=[\"\u201c\u2018'A-Z(])",
+    re.IGNORECASE,
+)
 
-MIN_CLAUSE_CHARS = 40  # skip stray headers / page numbers / whitespace noise
+# Compatibility constant for code that imported the old matcher.
+SECTION_HEADER_RE = re.compile(
+    r"^\s*(?:\d+(?:\.\d+)+\.?|\d+\.|\([a-zA-Z]\)|"
+    r"(?:SECTION|ARTICLE)\s+(?:\d+(?:\.\d+)*|[IVXLCDM]+)\.?)\s+\S",
+    re.IGNORECASE,
+)
 
-# If SECTION_HEADER_RE finds no numbered headers at all (e.g. contracts
-# using ALL-CAPS headers, roman numerals, or no numbering convention),
-# a whole section can end up as one oversized clause. Confirmed on real
-# CUAD contracts: a Franchise agreement produced a single 22,000+ char
-# "clause". Anything over this length gets a fallback secondary split.
-LONG_CLAUSE_FALLBACK_THRESHOLD = 3000
+ALL_CAPS_HEADER_RE = re.compile(
+    r"^\s*(?:[A-Z][A-Z&/\-]*\s+){0,7}[A-Z][A-Z&/\-]*\.?\s*$"
+)
 
-# Inline enumerated sub-item markers that can appear mid-paragraph rather
-# than at the start of a line, e.g. "...as follows: (a) the Party shall
-# ... (b) the Party will...". SECTION_HEADER_RE only matches at line
-# start, so these need a separate inline split.
-INLINE_SUBITEM_RE = re.compile(r"(?=\s\((?:[a-z]|[ivx]{1,4})\)\s)")
+FOOTNOTE_LINE_RE = re.compile(r"^\s*\d{1,2}(?![.\d])\s+")
+FOOTNOTE_CUES = (
+    "this form",
+    "this agreement gives",
+    "the provider",
+    "provider may",
+    "the customer",
+    "customer may",
+    "the parties",
+    "parties need",
+    "would need",
+    "should be",
+    "should consider",
+    "generally",
+    "pre-approved",
+    "end user data-related",
+)
+PAGE_FURNITURE_HINTS = {"acc form"}
 
-# Last-resort split when no structural markers exist at all: break on
-# sentence boundaries, keeping chunks under the fallback threshold. This
-# never produces a "correct" clause boundary, but prevents one enormous
-# garbled block from being sent to the classifier as if it were one clause.
-SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.;])\s+(?=[A-Z(])")
+DEFINITION_RE = re.compile(
+    r'^\d+\.\d+\s+["\u201c].{1,260}?(?:means?|has the meaning|is an?\b|is defined as)\b',
+    re.IGNORECASE,
+)
+
+INLINE_SUBITEM_RE = re.compile(r"(?=\s\((?:[a-z]|[ivx]{1,6})\)\s)", re.IGNORECASE)
+SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.;])\s+(?=[A-Z(\"\u201c])")
+
+
+def _normalize_line(line: str) -> str:
+    line = line.replace("\u00a0", " ").replace("\u200b", "")
+    return re.sub(r"[ \t]+", " ", line).strip()
+
+
+def _looks_like_all_caps_title(line: str) -> bool:
+    stripped = _normalize_line(line)
+    if not ALL_CAPS_HEADER_RE.fullmatch(stripped):
+        return False
+    if len(stripped) < 6 or len(stripped) > 100:
+        return False
+    if any(ch.isdigit() for ch in stripped):
+        return False
+    words = stripped.rstrip(".").split()
+    return 1 <= len(words) <= 8
+
+
+def _is_page_number_line(line: str) -> bool:
+    return bool(PAGE_NUMBER_RE.fullmatch(_normalize_line(line)))
+
+
+def _is_structural_start(line: str) -> bool:
+    line = _normalize_line(line)
+    if not line:
+        return False
+    if re.match(
+        r"^(?:section|article)\s+\d+(?:\.\d+)*\s+\(",
+        line,
+        re.IGNORECASE,
+    ):
+        return False
+    if SECTION_HEADER_RE.match(line):
+        return True
+    if NUMBERED_MARKER_RE.match(line) or PAREN_MARKER_RE.match(line):
+        return True
+    return _looks_like_all_caps_title(line)
+
+
+def _looks_like_footnote_start(line: str, index: int = 0, total: int = 0) -> bool:
+    """Identify drafting notes without treating ordinary numbered prose as one."""
+    normalized = _normalize_line(line)
+    match = FOOTNOTE_LINE_RE.match(normalized)
+    if not match or _is_structural_start(normalized):
+        return False
+    body = normalized[match.end() :].lower()
+    if any(cue in body for cue in FOOTNOTE_CUES):
+        return True
+    return bool(total and index >= max(0, int(total * 0.6)) and len(body) <= 240)
+
+
+def is_footnote(text: str) -> bool:
+    """Return whether text begins with a likely drafting-note footnote."""
+    return _looks_like_footnote_start(text)
+
+
+def is_definition(text: str) -> bool:
+    """Return whether text begins with a defined-term entry."""
+    return bool(DEFINITION_RE.match(_normalize_line(text)))
+
+
+def _normalize_header_key(line: str) -> str:
+    value = _normalize_line(line).lower()
+    value = re.sub(r"^page\s*\d+(?:\s*of\s*\d+)?[:\-–—]?\s*", "", value)
+    value = re.sub(r"[^a-z0-9 ]", "", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _strip_page_furniture(pages: list[str]) -> list[str]:
+    """Remove repeated edge furniture using page-frequency evidence."""
+    if not pages:
+        return pages
+
+    normalized_pages = [[_normalize_line(line) for line in page.splitlines()] for page in pages]
+    candidates: list[tuple[int, int, str]] = []
+    for page_index, lines in enumerate(normalized_pages):
+        edge_indices = set(range(min(6, len(lines))))
+        edge_indices.update(range(max(0, len(lines) - 6), len(lines)))
+        for line_index in sorted(edge_indices):
+            line = lines[line_index]
+            key = _normalize_header_key(line)
+            if key and not _is_page_number_line(line) and len(key) <= 180:
+                candidates.append((page_index, line_index, key))
+
+    groups: list[dict] = []
+    for page_index, line_index, key in candidates:
+        group = None
+        for existing in groups:
+            same_edge = (line_index < 6) == (existing["line_index"] < 6)
+            similar = difflib.SequenceMatcher(None, key, existing["representative"]).ratio() >= 0.90
+            if same_edge and similar:
+                group = existing
+                break
+        if group is None:
+            group = {
+                "representative": key,
+                "line_index": line_index,
+                "pages": set(),
+                "keys": [],
+            }
+            groups.append(group)
+        group["pages"].add(page_index)
+        group["keys"].append(key)
+
+    threshold = max(2, int(len(pages) * HEADER_FOOTER_MIN_PAGE_FRACTION + 0.999))
+    furniture_groups = [group for group in groups if len(group["pages"]) >= threshold]
+
+    cleaned: list[str] = []
+    for page_index, lines in enumerate(normalized_pages):
+        kept: list[str] = []
+        for line_index, line in enumerate(lines):
+            if not line or _is_page_number_line(line):
+                continue
+            key = _normalize_header_key(line)
+            if key in PAGE_FURNITURE_HINTS and (
+                line_index < 6 or line_index >= max(0, len(lines) - 6)
+            ):
+                continue
+            is_furniture = False
+            if line_index < 6 or line_index >= max(0, len(lines) - 6):
+                for group in furniture_groups:
+                    if page_index in group["pages"] and any(
+                        difflib.SequenceMatcher(None, key, candidate).ratio() >= 0.90
+                        for candidate in group["keys"]
+                    ):
+                        is_furniture = True
+                        break
+            if not is_furniture:
+                kept.append(line)
+        cleaned.append("\n".join(kept))
+    return cleaned
+
+
+def _remove_footnote_blocks(lines: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    in_footnote = False
+    for index, line in enumerate(lines):
+        normalized = _normalize_line(line)
+        if not normalized:
+            if in_footnote:
+                in_footnote = False
+            continue
+        if _is_page_number_line(normalized):
+            continue
+        if in_footnote:
+            if _is_structural_start(normalized) and not _looks_like_footnote_start(normalized, index, len(lines)):
+                in_footnote = False
+            else:
+                continue
+        if _looks_like_footnote_start(normalized, index, len(lines)):
+            in_footnote = True
+            continue
+        cleaned.append(normalized)
+    return cleaned
+
+
+def _clean_pages(pages: list[str]) -> list[str]:
+    prepared = []
+    for page in pages:
+        raw_lines = [_normalize_line(line) for line in page.splitlines()]
+        note_numbers = {
+            match.group(1)
+            for line in raw_lines
+            for match in [re.match(r"^\s*(\d{1,2})(?![.\d])\s+[A-Z]", line)]
+            if match and _looks_like_footnote_start(line)
+        }
+        lines: list[str] = []
+        for line in raw_lines:
+            if note_numbers:
+                numbers = "|".join(sorted(note_numbers, key=len, reverse=True))
+                line = re.sub(
+                    rf"(?<=[A-Za-z\"\u201d])(?:{numbers})(?![\d.])",
+                    "",
+                    line,
+                )
+                line = re.sub(
+                    rf"(?<=[A-Za-z\"\u201d])\.(?:{numbers})(?![\d.])",
+                    ".",
+                    line,
+                )
+            lines.append(line)
+        lines = _remove_footnote_blocks(lines)
+        prepared.append("\n".join(lines))
+    prepared = _strip_page_furniture(prepared)
+    return ["\n".join(_remove_footnote_blocks(page.splitlines())) for page in prepared]
+
+
+def extract_page_layers(file_path: Path) -> dict[str, list[str]]:
+    """Return raw and cleaned page text for diagnostics and internal use."""
+    suffix = file_path.suffix.lower()
+    if suffix == ".txt":
+        raw_pages = [file_path.read_text(encoding="utf-8", errors="ignore")]
+    elif suffix == ".pdf":
+        raw_pages = []
+        with pdfplumber.open(file_path) as pdf:
+            for page in pdf.pages:
+                raw_pages.append(page.extract_text() or "")
+    else:
+        raise ValueError(f"Unsupported file type: {suffix}. Use a .pdf or .txt file.")
+    return {"raw_pages": raw_pages, "cleaned_pages": _clean_pages(raw_pages)}
+
+
+def extract_pages(file_path: Path) -> list[dict[str, object]]:
+    """Extract cleaned pages while retaining page numbers internally."""
+    layers = extract_page_layers(file_path)
+    return [
+        {"page_number": index, "text": text}
+        for index, text in enumerate(layers["cleaned_pages"], start=1)
+    ]
+
+
+def extract_text(file_path: Path) -> str:
+    """Extract cleaned text, preserving page boundaries as blank lines."""
+    return "\n\n".join(str(page["text"]) for page in extract_pages(file_path) if page["text"])
+
+
+def _enumeration_context(prefix: str) -> bool:
+    lowered = prefix.lower()
+    return bool(
+        re.search(r"(?:following|as follows|include|includes|consist(?:s|ing) of)[^:\n]{0,80}:\s*$", lowered)
+        or re.search(r"\([a-z]\)\s+", lowered, re.IGNORECASE)
+    )
+
+
+def _split_line_at_markers(line: str) -> list[str]:
+    """Split a physical line at structural markers, including inline ones."""
+    positions: set[int] = set()
+    for match in NUMBERED_MARKER_RE.finditer(line):
+        marker = match.group("marker")
+        is_subsection = "." in marker.rstrip(".")
+        prefix = line[: match.start()]
+        is_cross_reference = bool(
+            re.search(r"(?:section|article|clause)\s*$", prefix.rstrip(), re.IGNORECASE)
+        )
+        if not is_cross_reference and (
+            is_subsection or match.start() == 0 or _enumeration_context(prefix)
+        ):
+            positions.add(match.start())
+    for match in SECTION_MARKER_RE.finditer(line):
+        starts_cross_reference = bool(
+            match.start() == 0
+            and re.match(r"(?:section|article)\s+\d+(?:\.\d+)*\s+\(", line, re.IGNORECASE)
+        )
+        if not starts_cross_reference and (
+            match.start() == 0 or _enumeration_context(line[: match.start()])
+        ):
+            positions.add(match.start())
+
+    paren_matches = list(PAREN_MARKER_RE.finditer(line))
+    if paren_matches:
+        first = paren_matches[0]
+        enum_active = first.start() == 0 or _enumeration_context(line[: first.start()])
+        if enum_active:
+            positions.update(match.start() for match in paren_matches)
+
+    if _looks_like_all_caps_title(line):
+        positions.add(0)
+
+    if not positions:
+        return [line]
+    ordered = sorted(positions)
+    parts: list[str] = []
+    boundaries = ordered + [len(line)]
+    start = 0
+    for boundary in boundaries:
+        part = line[start:boundary].strip()
+        if part:
+            parts.append(part)
+        start = boundary
+    return parts
 
 
 def _sentence_chunk(text: str) -> list[str]:
-    """Last-resort split when no structural markers exist: break on
-    sentence boundaries, keeping chunks under the fallback threshold.
-    """
-    sentences = SENTENCE_BOUNDARY_RE.split(text)
+    sentences = [part.strip() for part in SENTENCE_BOUNDARY_RE.split(text) if part.strip()]
     chunks: list[str] = []
     current = ""
     for sentence in sentences:
-        if current and len(current) + len(sentence) > LONG_CLAUSE_FALLBACK_THRESHOLD:
+        if current and len(current) + len(sentence) + 1 > LONG_CLAUSE_FALLBACK_THRESHOLD:
             chunks.append(current.strip())
             current = sentence
         else:
             current = f"{current} {sentence}".strip()
     if current:
         chunks.append(current.strip())
-    return chunks if chunks else [text]
+    return chunks or [text]
 
 
 def _fallback_split_oversized(clause: str) -> list[str]:
-    """Break up a clause that SECTION_HEADER_RE failed to split, using
-    inline sub-item markers first, then sentence-boundary chunking as a
-    last resort. Every returned piece is guaranteed to be at or under
-    LONG_CLAUSE_FALLBACK_THRESHOLD -- inline-marker splitting alone does
-    NOT guarantee this (an unevenly-sized sub-item can still be oversized),
-    so each resulting part is checked and sentence-chunked again if needed.
-    """
     if len(clause) <= LONG_CLAUSE_FALLBACK_THRESHOLD:
         return [clause]
-
-    # Try inline (a)/(b)/(i)/(ii) markers first -- these usually align
-    # with real sub-clause boundaries.
-    parts = [p.strip() for p in INLINE_SUBITEM_RE.split(clause) if p.strip()]
+    parts = [part.strip() for part in INLINE_SUBITEM_RE.split(clause) if part.strip()]
     if len(parts) <= 1:
-        parts = [clause]  # no inline markers found
-
+        parts = [clause]
     result: list[str] = []
     for part in parts:
-        if len(part) <= LONG_CLAUSE_FALLBACK_THRESHOLD:
-            result.append(part)
-        else:
-            # Still oversized after inline splitting (or no markers found
-            # at all) -- force it under the threshold via sentence chunking.
-            result.extend(_sentence_chunk(part))
-
+        result.extend([part] if len(part) <= LONG_CLAUSE_FALLBACK_THRESHOLD else _sentence_chunk(part))
     return result
 
 
-def is_footnote(text: str) -> bool:
-    """True if this looks like a numbered drafting-note footnote rather
-    than a real contract clause."""
-    return bool(FOOTNOTE_LINE_RE.match(text.strip()))
-
-
-def is_definition(text: str) -> bool:
-    """True if this looks like a defined-term entry (e.g. inside a
-    DEFINITIONS section) rather than a substantive clause."""
-    return bool(DEFINITION_RE.match(text.strip()))
-
-
-def _strip_repeated_header_footer_lines(pages: list[str]) -> list[str]:
-    """Remove lines that repeat (or are near-duplicates) across a large
-    fraction of pages -- running headers/footers/disclaimers.
-
-    This implementation normalizes lines (lowercase, collapse whitespace,
-    strip leading page numbers), groups near-duplicates using
-    difflib.SequenceMatcher, and then removes any group that appears on at
-    least HEADER_FOOTER_MIN_PAGE_FRACTION of pages.
-    """
-    if len(pages) < 3:
-        return pages  # not enough pages for frequency detection to be reliable
-
-    def _normalize_for_header(s: str) -> str:
-        s = s.strip().lower()
-        if not s:
-            return ""
-        # collapse whitespace
-        s = re.sub(r"\s+", " ", s)
-        # remove common leading page markers like "page 1 of 10" or bare numbers
-        s = re.sub(r"^page\s*\d+(?:\s*of\s*\d+)?[:\-–—]?\s*", "", s)
-        s = re.sub(r"^[\d\.\-]+\s+", "", s)
-        # reduce punctuation to boost similarity matching
-        s = re.sub(r"[^a-z0-9 ]", "", s)
-        s = s.strip()
-        return s
-
-    # Map a representative normalized string -> count of pages it appears on
-    line_page_counts: dict[str, int] = {}
-
-    for page_text in pages:
-        seen_this_page = set()
-        for line in page_text.split("\n"):
-            norm = _normalize_for_header(line)
-            if not norm or norm in seen_this_page:
-                continue
-
-            # try to find an existing representative that's very similar
-            matched = None
-            for rep in list(line_page_counts.keys()):
-                if difflib.SequenceMatcher(None, rep, norm).ratio() >= 0.9:
-                    matched = rep
-                    break
-
-            if matched is not None:
-                line_page_counts[matched] += 1
-                seen_this_page.add(matched)
-            else:
-                line_page_counts[norm] = line_page_counts.get(norm, 0) + 1
-                seen_this_page.add(norm)
-
-    threshold = max(2, int(len(pages) * HEADER_FOOTER_MIN_PAGE_FRACTION))
-    boilerplate_norms = {line for line, count in line_page_counts.items() if count >= threshold}
-
-    if not boilerplate_norms:
-        return pages
-
-    cleaned_pages = []
-    for page_text in pages:
-        kept_lines = [
-            line for line in page_text.split("\n") if _normalize_for_header(line) not in boilerplate_norms
-        ]
-        cleaned_pages.append("\n".join(kept_lines))
-    return cleaned_pages
-
-
-def extract_text(file_path: Path) -> str:
-    """Extract raw text from an uploaded contract (PDF or .txt), stripping
-    repeated running headers/footers for PDFs.
-    """
-    suffix = file_path.suffix.lower()
-
-    if suffix == ".txt":
-        return file_path.read_text(encoding="utf-8", errors="ignore")
-
-    if suffix == ".pdf":
-        pages = []
-        with pdfplumber.open(file_path) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text() or ""
-                pages.append(text)
-        pages = _strip_repeated_header_footer_lines(pages)
-        return "\n".join(pages)
-
-    raise ValueError(f"Unsupported file type: {suffix}. Use .pdf or .txt.")
-
-
 def split_into_clauses(raw_text: str) -> list[str]:
-    """
-    Heuristic contract segmentation:
-      1. Normalize whitespace/line breaks.
-      2. Split on blank lines (paragraph breaks) first.
-      3. Within paragraphs, further split at numbered-section headers AND
-         at footnote markers (so a footnote never gets glued onto the
-         real clause text next to it).
-      4. Drop footnote fragments entirely -- they're drafting commentary,
-         not contract clauses, and would otherwise get force-classified
-         into a wrong CUAD label.
-      5. Drop fragments too short to be a real clause.
-
-    This is a heuristic, not a legal-structure parser -- expect occasional
-    over/under-splitting on unusually formatted contracts. Scanned/
-    image-only PDFs need OCR first; pdfplumber can't read those pages.
-    """
+    """Split normalized contract text using structural markers first."""
     text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"\n{3,}", "\n\n", text)
-
-    raw_paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    lines = _remove_footnote_blocks(text.split("\n"))
 
     clauses: list[str] = []
-    for paragraph in raw_paragraphs:
-        lines = paragraph.split("\n")
-        current: list[str] = []
+    current: list[str] = []
 
-        for line in lines:
-            sec_match = SECTION_HEADER_RE.match(line)
-            is_boundary = (
-                bool(sec_match)
-                or bool(FOOTNOTE_LINE_RE.match(line))
-                or _looks_like_all_caps_title(line)
-            )
-
-            # Don't treat short parenthetical inline markers (e.g. "(i)", "(a)")
-            # as a clause boundary if the immediately preceding text in the
-            # same paragraph already matched a DEFINITION entry. This avoids
-            # splitting a definition's continuation into a separate clause.
-            if sec_match and line.strip().startswith("(") and current and is_definition(" ".join(current)):
-                is_boundary = False
-
-            if is_boundary and current:
-                clauses.append(" ".join(current).strip())
-                current = [line]
-            else:
-                current.append(line)
-
+    def flush() -> None:
         if current:
-            clauses.append(" ".join(current).strip())
+            value = re.sub(r"\s+", " ", " ".join(current)).strip()
+            if value:
+                clauses.append(value)
+            current.clear()
 
-    cleaned = []
+    for raw_line in lines:
+        line = _normalize_line(raw_line)
+        if not line:
+            flush()
+            continue
+        parts = _split_line_at_markers(line)
+        for part_index, part in enumerate(parts):
+            definition_continuation = bool(
+                current
+                and PAREN_MARKER_RE.match(part)
+                and is_definition(" ".join(current))
+            )
+            starts_boundary = (
+                not definition_continuation
+                and (part_index > 0 or _is_structural_start(part))
+            )
+            if starts_boundary:
+                flush()
+            current.append(part)
+    flush()
+
+    cleaned: list[str] = []
+    pending_heading: str | None = None
     for clause in clauses:
         clause = re.sub(r"\s+", " ", clause).strip()
+        if not clause or is_footnote(clause):
+            continue
+        if _looks_like_all_caps_title(clause) and len(clause) < MIN_CLAUSE_CHARS:
+            pending_heading = clause
+            continue
+        if pending_heading:
+            clause = f"{pending_heading} {clause}"
+            pending_heading = None
         if len(clause) < MIN_CLAUSE_CHARS:
             continue
-        if is_footnote(clause):
-            continue  # drafting commentary, not a contract clause
         cleaned.extend(_fallback_split_oversized(clause))
 
+    if pending_heading and len(pending_heading) >= MIN_CLAUSE_CHARS:
+        cleaned.append(pending_heading)
     return cleaned

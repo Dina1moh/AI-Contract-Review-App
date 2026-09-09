@@ -72,6 +72,17 @@ QDRANT_PATH = os.getenv(
     "QDRANT_PATH", str(PROJECT_ROOT / "data" / "qdrant_local")
 )
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "cuad_train")
+LEGAL_KNOWLEDGE_COLLECTION = os.getenv(
+    "LEGAL_KNOWLEDGE_COLLECTION", "legal_knowledge"
+)
+LEGAL_KNOWLEDGE_TOP_K = int(os.getenv("LEGAL_KNOWLEDGE_TOP_K", "3"))
+_LEGAL_KNOWLEDGE_PATH_VALUE = os.getenv(
+    "LEGAL_KNOWLEDGE_PATH",
+    str(PROJECT_ROOT / "backend" / "data" / "legal_knowledge"),
+)
+LEGAL_KNOWLEDGE_PATH = Path(_LEGAL_KNOWLEDGE_PATH_VALUE)
+if not LEGAL_KNOWLEDGE_PATH.is_absolute():
+    LEGAL_KNOWLEDGE_PATH = PROJECT_ROOT / LEGAL_KNOWLEDGE_PATH
 
 
 # --------------------------------------------------------------------------
@@ -79,7 +90,10 @@ QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "cuad_train")
 # --------------------------------------------------------------------------
 TOP_K = int(os.getenv("TOP_K", "5"))
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_URL = os.getenv(
+    "OLLAMA_URL",
+    os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+)
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b")
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "60"))
 OLLAMA_MAX_RETRY_ATTEMPTS = int(os.getenv("OLLAMA_MAX_RETRY_ATTEMPTS", "3"))

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from typing import Callable
 
 import requests
 from qdrant_client import QdrantClient
@@ -37,6 +38,13 @@ __all__ = [
     "classify_clause",
     "load_label_definitions",
 ]
+
+ProgressCallback = Callable[[dict], None]
+
+
+def _emit(callback: ProgressCallback | None, stage: str, message: str, **details) -> None:
+    if callback:
+        callback({"type": "progress", "stage": stage, "message": message, **details})
 
 
 # --------------------------------------------------------------------------
@@ -360,8 +368,16 @@ def classify_clause(
     labels: list[str],
     label_definitions: dict[str, str],
     top_k: int = TOP_K,
+    progress_callback: ProgressCallback | None = None,
 ) -> dict:
+    _emit(progress_callback, "search", "Searching similar CUAD examples in Qdrant")
     retrieved_examples = retrieve_similar(qdrant_client, query_vector, top_k=top_k)
+    _emit(
+        progress_callback,
+        "search",
+        f"Qdrant search complete ({len(retrieved_examples)} matches)",
+        matches=len(retrieved_examples),
+    )
     extracted_features = extract_legal_information(clause_text)
     prompt = build_prompt(
         clause_text=clause_text,
@@ -370,8 +386,15 @@ def classify_clause(
         label_definitions=label_definitions,
         extracted_features=extracted_features,
     )
+    _emit(progress_callback, "classification", "Running the local Ollama classifier")
     raw_response = call_ollama(prompt)
     predicted_label = parse_prediction(raw_response, labels)
+    _emit(
+        progress_callback,
+        "classification",
+        f"Classification complete: {predicted_label}",
+        label=predicted_label,
+    )
 
     return {
         "predicted_label": predicted_label,

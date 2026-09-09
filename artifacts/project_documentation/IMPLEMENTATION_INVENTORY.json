@@ -1,0 +1,68 @@
+{
+  "audit_scope": {
+    "repository_root": "D:/gradation project/gradation project/application/cuad-rag-app/AI-contract-reviwe",
+    "production_code_modified": false,
+    "inspection_date": "2026-09-08",
+    "secrets_included": false
+  },
+  "components": {
+    "frontend": {"status": "Implemented", "files": ["frontend/src/App.jsx", "frontend/src/main.jsx", "frontend/src/index.css", "frontend/vite.config.js"]},
+    "api": {"status": "Implemented", "files": ["backend/app/main.py", "backend/app/api/routes/documents.py", "backend/app/models/schemas.py"]},
+    "document_processing": {"status": "Implemented", "files": ["backend/app/core/rag/segmenter.py", "backend/app/core/rag/validator.py", "backend/app/services/rag_service.py"]},
+    "cuad_classification": {"status": "Implemented", "files": ["backend/app/core/rag/prompt.py", "backend/app/core/rag/generator.py", "data/metadata/cuad_label_definitions.json"]},
+    "cuad_retrieval": {"status": "Implemented", "files": ["backend/app/core/rag/retriever.py", "data/scripts/embedding/embed_train.py", "data/scripts/embedding/build_qdrant.py"]},
+    "legal_knowledge_rag": {"status": "Implemented", "files": ["backend/app/core/legal_knowledge/ingest.py", "backend/app/core/legal_knowledge/retriever.py", "backend/data/legal_knowledge"]},
+    "risk_detection": {"status": "Implemented", "files": ["backend/app/core/risk/risk_detector.py", "backend/data/legal_knowledge/risk_indicators.md"]},
+    "free_text_query": {"status": "Not Implemented", "files": ["backend/app/api/routes/query.py"]}
+  },
+  "files": {
+    "api": ["backend/app/main.py", "backend/app/api/routes/documents.py", "backend/app/api/routes/health.py", "backend/app/api/routes/query.py"],
+    "services": ["backend/app/services/rag_service.py"],
+    "rag": ["backend/app/core/rag/segmenter.py", "backend/app/core/rag/validator.py", "backend/app/core/rag/embedder.py", "backend/app/core/rag/retriever.py", "backend/app/core/rag/generator.py", "backend/app/core/rag/prompt.py"],
+    "legal_knowledge": ["backend/app/core/legal_knowledge/ingest.py", "backend/app/core/legal_knowledge/retriever.py"],
+    "risk": ["backend/app/core/risk/risk_detector.py"],
+    "data": ["data/splits/train/master_clauses_train.csv", "data/metadata/cuad_label_definitions.json", "data/embeddings/train_embeddings.json", "data/embeddings/train_metadata.jsonl"],
+    "frontend": ["frontend/src/App.jsx", "frontend/src/main.jsx", "frontend/src/index.css", "frontend/vite.config.js"]
+  },
+  "functions": {
+    "upload_api": ["classify_document"],
+    "service": ["classify_contract", "_default_risk", "_with_risk_fields"],
+    "segmentation": ["extract_text", "split_into_clauses", "_fallback_split_oversized", "is_footnote", "is_definition"],
+    "validation": ["is_real_clause", "_call_ollama_validator"],
+    "embedding": ["make_cohere_client", "embed_queries", "embed_documents", "embed_texts"],
+    "cuad_retrieval": ["make_qdrant_client", "retrieve_similar"],
+    "cuad_generation": ["extract_legal_information", "call_ollama", "parse_prediction", "classify_clause"],
+    "legal_ingestion": ["parse_knowledge_document", "chunk_text", "load_curated_chunks", "ingest_legal_knowledge"],
+    "legal_retrieval": ["map_clause_category", "build_guidance_query", "retrieve_legal_guidance"],
+    "risk": ["detect_legal_indicators", "build_risk_prompt", "parse_risk_response", "detect_clause_risk"]
+  },
+  "models": {
+    "embedding": "Cohere model configured by COHERE_MODEL; observed runtime value embed-english-v3.0",
+    "llm": "Ollama model configured by OLLAMA_MODEL; observed runtime value llama3.2:3b",
+    "classification": "CUAD labels plus local Ollama JSON classification prompt",
+    "risk": "local Ollama JSON reasoning prompt; not a legal judgment model"
+  },
+  "datasets": {
+    "cuad_train_csv": {"path": "data/splits/train/master_clauses_train.csv", "rows": 10545, "documents": 410, "unique_clause_types": 41, "metadata_rows": 3541, "substantive_rows": 7004},
+    "cuad_allowed_labels": {"count": 36, "source": "load_labels filters is_metadata rows"},
+    "label_definitions": "data/metadata/cuad_label_definitions.json"
+  },
+  "vector_collections": {
+    "cuad_train": {"path": "data/qdrant_local/collection/cuad_train/storage.sqlite", "points": 7004, "vector_dimension": 1024, "distance": "Cosine", "payload_fields": ["answer", "clause_text", "clause_type", "document_id", "is_metadata"]},
+    "legal_knowledge": {"path": "data/qdrant_local/collection/legal_knowledge/storage.sqlite", "points": 30, "vector_dimension": 1024, "distance": "Cosine", "payload_fields": ["chunk_id", "clause_category", "document_filename", "retrieved_text", "source_name", "source_url", "title"], "current_local_chunk_count": 19, "qdrant_ids_not_matching_current_local_chunks": 11}
+  },
+  "metrics": {
+    "legal_documents_on_disk": 17,
+    "legal_chunks_from_current_files": 19,
+    "legal_points_by_source": {"World Commerce & Contracting": 15, "World Intellectual Property Organization": 5, "International Chamber of Commerce": 1, "United Nations Commission on International Trade Law": 1, "American Bar Association": 6, "International Bar Association": 2},
+    "legal_categories_in_qdrant": ["Assignment", "Confidentiality", "Dispute Resolution", "Force Majeure", "Indemnification", "Insurance", "Intellectual Property", "Limitation of Liability", "Payment", "Termination", "Warranties"],
+    "sample_pdf": {"path": "Cooley SaaS Agreement ACC Form.pdf", "pages_extracted_by_pdfplumber": 22, "raw_extracted_characters": 80806, "nonempty_pages": 22, "segmentation_probe_characters": 80848, "segmentation_probe_paragraphs": 1, "segmentation_probe_segments": 120, "segmentation_probe_average_segment_chars": 595.7, "segmentation_probe_min_segment_chars": 51, "segmentation_probe_max_segment_chars": 2444, "definitions_detected": 18, "footnote_like_lines": 20, "numbered_header_lines": 148, "all_caps_title_lines": 20, "inline_subitem_markers": 100},
+    "configuration": {"cuad_top_k": 5, "legal_top_k": 3, "cohere_batch_size": 96, "cohere_max_retry_attempts": 8, "ollama_timeout_seconds": 60, "ollama_max_retry_attempts": 3, "legal_chunk_size_chars": 1200, "legal_chunk_overlap_chars": 150},
+    "file_enumeration": {"repository_files_excluding_node_modules_git_dist_pycache": 10411, "backend_frontend_data_files_enumerated": 2290}
+  },
+  "supported_risk_categories_exact_pattern_keys": ["Limitation of Liability", "Indemnification", "Termination", "Intellectual Property", "Confidentiality", "Payment", "Force Majeure", "Dispute Resolution", "Insurance", "Warranties", "Assignment"],
+  "legal_sources": {"local_documents": 17, "local_chunks": 19, "cataloged_providers": ["World Commerce & Contracting", "World Intellectual Property Organization", "International Chamber of Commerce", "United Nations Commission on International Trade Law", "American Bar Association", "International Bar Association"]},
+  "tests": {"file": "backend/tests/test_legal_knowledge.py", "test_count": 14, "last_observed_result": "14 passed, 2 warnings", "frontend_build": "Not verified; node/npm unavailable on PATH", "real_end_to_end": "Not successful; API returned 503 because Ollama was unavailable"},
+  "configuration_variable_names": ["COHERE_API_KEY", "COHERE_MODEL", "COHERE_EMBED_MODEL", "COHERE_BATCH_SIZE", "COHERE_MAX_RETRY_ATTEMPTS", "QDRANT_URL", "QDRANT_API_KEY", "QDRANT_PATH", "QDRANT_COLLECTION", "LEGAL_KNOWLEDGE_COLLECTION", "LEGAL_KNOWLEDGE_TOP_K", "LEGAL_KNOWLEDGE_PATH", "TOP_K", "OLLAMA_URL", "OLLAMA_BASE_URL", "OLLAMA_MODEL", "OLLAMA_TIMEOUT_SECONDS", "OLLAMA_MAX_RETRY_ATTEMPTS"],
+  "status_summary": {"production_code_audit": "Implemented", "local_qdrant_inspection": "Implemented", "real_legal_retrieval_probe": "Implemented", "ollama_reachability": "Not Verified as available; safe TCP probe failed", "frontend_build": "Not Verified", "segment_metrics_exact_production_path": "Not Verified; full extractor probe exceeded bounded runtime"}
+}

@@ -6,6 +6,8 @@ contract-metadata rows (Document Name, Parties, dates, etc.).
 
 from __future__ import annotations
 
+from threading import Lock
+
 from qdrant_client import QdrantClient, models
 
 from ..config import (
@@ -16,13 +18,25 @@ from ..config import (
     TOP_K,
 )
 
+_LOCAL_CLIENT: QdrantClient | None = None
+_CLIENT_LOCK = Lock()
+
 
 def make_qdrant_client() -> QdrantClient:
+    global _LOCAL_CLIENT
+
     if QDRANT_URL:
         if QDRANT_API_KEY:
             return QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
         return QdrantClient(url=QDRANT_URL)
-    return QdrantClient(path=QDRANT_PATH)
+
+    # Qdrant local mode places a lock on its storage directory. Reusing one
+    # client prevents concurrent requests from opening the same directory
+    # through separate local-storage instances.
+    with _CLIENT_LOCK:
+        if _LOCAL_CLIENT is None:
+            _LOCAL_CLIENT = QdrantClient(path=QDRANT_PATH)
+        return _LOCAL_CLIENT
 
 
 def retrieve_similar(
