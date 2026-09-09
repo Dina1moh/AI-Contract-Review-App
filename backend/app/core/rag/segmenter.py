@@ -288,11 +288,11 @@ def extract_page_layers(file_path: Path) -> dict[str, list[str]]:
                 from .hybrid_parser import extract_docling_pages
 
                 raw_pages = extract_docling_pages(file_path)
-            except (ImportError, RuntimeError, ValueError):
+            except Exception as exc:
                 if parser_mode == "docling":
                     raise RuntimeError(
                         "Docling parser requested but unavailable or unable to parse the PDF."
-                    )
+                    ) from exc
         if not raw_pages:
             with pdfplumber.open(file_path) as pdf:
                 raw_pages = [page.extract_text() or "" for page in pdf.pages]
