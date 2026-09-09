@@ -77,11 +77,11 @@ fixture: clauses 1–15 must not collapse into three records, and nested items
 must remain associated with their parent where the parsed structure exposes
 them.
 
-The environment used for this implementation did not have Python/Pytest or
-Docling installed, and the target PDF was not available after the workspace
-cleanup. Therefore no claim of an executed ZTO end-to-end result is made here;
-the first deployment validation must install the production requirements and
-run the fixture through `segment_document`.
+The target PDF is present in the repository, but the environment used for this
+implementation did not have a working Python/Pytest or Docling installation.
+Therefore no claim of an executed ZTO end-to-end result is made here; the
+first deployment validation must install the production requirements and run
+the fixture through `segment_document`.
 
 ## Known limitations
 
