@@ -246,6 +246,7 @@ def build_prompt(
     labels: list[str],
     label_definitions: dict[str, str],
     extracted_features: dict[str, list[str]],
+    candidate_labels: list[str] | None = None,
 ) -> str:
     """
     Prompt-tuning notes:
@@ -262,7 +263,8 @@ def build_prompt(
       exact wording, but keep the final JSON-format instruction intact,
       since that's what response parsing relies on.
     """
-    label_list = "\n".join(f"- {label}" for label in labels)
+    allowed_labels = candidate_labels if candidate_labels is not None else labels
+    label_list = "\n".join(f"- {label}" for label in allowed_labels) or "- UNKNOWN"
     example_block = _format_examples(examples) if examples else "None"
     label_definition_block = _format_label_definitions(label_definitions)
     extracted_features_json = json.dumps(
@@ -274,7 +276,7 @@ def build_prompt(
     return f"""You are a legal contract clause classifier for CUAD.
 
 Task:
-Identify the MAIN LEGAL FUNCTION of the clause and return exactly one valid CUAD label.
+Identify the MAIN LEGAL FUNCTION of the clause and select the best-supported category from the retrieved candidates.
 
 Decision rules:
 - Use the clause text, the extracted legal information, the label definitions, and the retrieved training examples together.
@@ -283,15 +285,15 @@ Decision rules:
 - Prefer the primary contractual function when several concepts appear.
 - Do not rely on keyword matching alone.
 - Do not invent facts.
-- Do not invent labels.
-- Return exactly one label from the allowed list.
+- Do not invent labels or select a category that is not listed as a candidate.
+- Return exactly one candidate category, or UNKNOWN if none of the candidates is appropriate.
 - Return ONLY a JSON object in this exact format:
-  {{"clause_type": "<one allowed CUAD label>"}}
+  {{"clause_type": "<one candidate category or UNKNOWN>"}}
 
 Original clause:
 "{clause_text}"
 
-Allowed CUAD labels:
+Candidate categories from retrieved Top-K evidence:
 {label_list}
 
 CUAD label definitions:

@@ -35,6 +35,7 @@ __all__ = [
     "extract_legal_information",
     "call_ollama",
     "parse_prediction",
+    "parse_prediction_result",
     "classify_clause",
     "load_label_definitions",
 ]
@@ -330,32 +331,74 @@ def call_ollama(prompt: str) -> str:
     ) from last_error
 
 
-def parse_prediction(raw_response: str, labels: list[str]) -> str:
+def _canonical_labels(labels: list[str]) -> dict[str, str]:
+    return {label.strip().lower(): label for label in labels if str(label).strip()}
+
+
+def parse_prediction_result(
+    raw_response: str,
+    labels: list[str],
+    candidate_labels: list[str] | None = None,
+) -> dict[str, str | None]:
+    """Validate an Ollama response against the retrieved candidate set."""
+    all_labels = _canonical_labels(labels)
+    candidates = candidate_labels if candidate_labels is not None else labels
+    candidate_map = _canonical_labels(candidates)
+    raw_text = str(raw_response or "").strip()
+
+    parsed = None
     try:
-        parsed = json.loads(raw_response)
-        candidate = str(parsed.get("clause_type", "")).strip()
-        for label in labels:
-            if candidate.lower() == label.lower():
-                return label
-    except (json.JSONDecodeError, AttributeError):
-        pass
+        parsed = json.loads(raw_text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*?\}", raw_text, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                parsed = None
 
-    match = re.search(r"\{.*?\}", raw_response, re.DOTALL)
-    if match:
-        try:
-            parsed = json.loads(match.group(0))
-            candidate = str(parsed.get("clause_type", "")).strip()
-            for label in labels:
-                if candidate.lower() == label.lower():
-                    return label
-        except (json.JSONDecodeError, AttributeError):
-            pass
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("clause_type"), str):
+        return {
+            "prediction": "UNKNOWN",
+            "status": "MALFORMED_RESPONSE",
+            "raw_candidate": None,
+        }
 
-    found = [label for label in labels if label.lower() in raw_response.lower()]
-    if found:
-        return max(found, key=len)
+    raw_candidate = parsed["clause_type"].strip()
+    if raw_candidate.upper() in {"UNKNOWN", "NONE"}:
+        return {
+            "prediction": "UNKNOWN",
+            "status": "UNKNOWN",
+            "raw_candidate": raw_candidate,
+        }
 
-    return "UNKNOWN"
+    normalized = raw_candidate.lower()
+    if normalized not in all_labels or normalized not in candidate_map:
+        return {
+            "prediction": "UNKNOWN",
+            "status": "OUT_OF_CANDIDATE",
+            "raw_candidate": raw_candidate,
+        }
+
+    return {
+        "prediction": candidate_map[normalized],
+        "status": "VALID_CANDIDATE",
+        "raw_candidate": raw_candidate,
+    }
+
+
+def parse_prediction(
+    raw_response: str,
+    labels: list[str],
+    candidate_labels: list[str] | None = None,
+) -> str:
+    return str(
+        parse_prediction_result(
+            raw_response,
+            labels,
+            candidate_labels=candidate_labels,
+        )["prediction"]
+    )
 
 
 # --------------------------------------------------------------------------
@@ -378,17 +421,34 @@ def classify_clause(
         f"Qdrant search complete ({len(retrieved_examples)} matches)",
         matches=len(retrieved_examples),
     )
+    valid_labels = _canonical_labels(labels)
+    candidate_labels: list[str] = []
+    for example in retrieved_examples:
+        label = str(example.get("clause_type", "")).strip()
+        canonical = valid_labels.get(label.lower())
+        if canonical and canonical not in candidate_labels:
+            candidate_labels.append(canonical)
     extracted_features = extract_legal_information(clause_text)
     prompt = build_prompt(
         clause_text=clause_text,
         examples=retrieved_examples,
         labels=labels,
-        label_definitions=label_definitions,
+        label_definitions={
+            label: label_definitions[label]
+            for label in candidate_labels
+            if label in label_definitions
+        },
         extracted_features=extracted_features,
+        candidate_labels=candidate_labels,
     )
     _emit(progress_callback, "classification", "Running the local Ollama classifier")
     raw_response = call_ollama(prompt)
-    predicted_label = parse_prediction(raw_response, labels)
+    prediction_result = parse_prediction_result(
+        raw_response,
+        labels,
+        candidate_labels=candidate_labels,
+    )
+    predicted_label = str(prediction_result["prediction"])
     _emit(
         progress_callback,
         "classification",
@@ -402,6 +462,9 @@ def classify_clause(
         "retrieved_examples": retrieved_examples,
         "retrieved_labels": [ex["clause_type"] for ex in retrieved_examples],
         "retrieved_scores": [round(float(ex["score"]), 4) for ex in retrieved_examples],
+        "candidate_labels": candidate_labels,
+        "prediction_status": prediction_result["status"],
+        "raw_prediction_candidate": prediction_result["raw_candidate"],
         "extracted_features": extracted_features,
         "prompt": prompt,
     }
