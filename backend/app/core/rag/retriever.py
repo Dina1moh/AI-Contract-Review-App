@@ -64,6 +64,7 @@ def retrieve_similar(
     hits = getattr(response, "points", response)
     return [
         {
+            "source_id": str(hit.id),
             "score": hit.score,
             "clause_type": hit.payload["clause_type"],
             "clause_text": hit.payload["clause_text"],

@@ -52,12 +52,12 @@ async def classify_document(
     tmp_path, _ = _save_upload(file)
 
     try:
-        results = classify_contract(tmp_path)
+        pipeline = classify_contract(tmp_path)
     except ValueError as exc:
         # No clauses detected, empty file, etc. -- a client-fixable error.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
-        # Ollama down, Cohere/Qdrant unreachable, etc. -- a server-side
+        # Model provider down, Cohere/Qdrant unreachable, etc. -- a server-side
         # dependency failure, not the client's fault.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     finally:
@@ -65,8 +65,9 @@ async def classify_document(
 
     return ContractClassificationResponse(
         filename=file.filename or tmp_path.name,
-        total_clauses=len(results),
-        clauses=[ClauseResult(**r) for r in results],
+        total_clauses=len(pipeline["clauses"]),
+        clauses=[ClauseResult(**r) for r in pipeline["clauses"]],
+        contract_risk_assessment=pipeline["contract_risk_assessment"],
     )
 
 
@@ -82,11 +83,12 @@ async def classify_document_stream(file: UploadFile = File(...)):
 
     def worker() -> None:
         try:
-            results = classify_contract(tmp_path, progress_callback=publish)
+            pipeline = classify_contract(tmp_path, progress_callback=publish)
             response = ContractClassificationResponse(
                 filename=filename,
-                total_clauses=len(results),
-                clauses=[ClauseResult(**r) for r in results],
+                total_clauses=len(pipeline["clauses"]),
+                clauses=[ClauseResult(**r) for r in pipeline["clauses"]],
+                contract_risk_assessment=pipeline["contract_risk_assessment"],
             )
             payload = response.model_dump() if hasattr(response, "model_dump") else response.dict()
             events.put({"type": "result", "data": payload})

@@ -115,18 +115,7 @@ function ContractClassifier() {
     }
   }
 
-  function riskStatusText(clause) {
-    if (clause.risk) return "Potential Risk";
-    const reason = String(clause.reason || "").toLowerCase();
-    if (reason.includes("not configured")) {
-      return "Risk Analysis Not Configured for This Clause";
-    }
-    return "No Risk Indicator Detected";
-  }
-
-  function isConfigured(clause) {
-    return !String(clause.reason || "").toLowerCase().includes("not configured");
-  }
+  const assessment = result?.contract_risk_assessment || {};
 
   return (
     <div className="page">
@@ -173,87 +162,88 @@ function ContractClassifier() {
       )}
 
       {result && (
+        <>
+        <section className="contract-risk-assessment">
+          <h2>Contract Risk Assessment</h2>
+          <div className="summary" aria-label="Contract risk assessment summary">
+            <span>Overall Risk: {assessment.overall_risk || "Unavailable"}</span>
+            <span>Status: {assessment.status || "RISK_ANALYSIS_UNAVAILABLE"}</span>
+          </div>
+          {assessment.summary && (
+            <div className="risk-detail"><strong>Summary:</strong> {assessment.summary}</div>
+          )}
+          {assessment.risk_domains?.length > 0 && (
+            <div className="risk-detail">
+              <strong>Risk Domains</strong>
+              <ul className="evidence-list">
+                {assessment.risk_domains.map((domain, index) => (
+                  <li key={`${domain.domain}-${index}`}>
+                    <strong>{domain.domain}</strong> — {domain.severity}: {domain.title}
+                    <div>{domain.description}</div>
+                    <div><strong>Impact:</strong> {domain.impact}</div>
+                    <div><strong>Recommendation:</strong> {domain.recommendation}</div>
+                    {domain.evidence?.map((item, evidenceIndex) => (
+                      <div key={`${item.clause_id}-${evidenceIndex}`}><strong>Clause {item.clause_id}:</strong> {item.quote}</div>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {assessment.cross_clause_findings?.length > 0 && (
+            <div className="risk-detail"><strong>Cross-Clause Risks</strong><ul className="evidence-list">
+              {assessment.cross_clause_findings.map((finding, index) => <li key={index}>Clauses {(finding.clauses || []).join(" + ")} — {finding.severity}: {finding.finding}</li>)}
+            </ul></div>
+          )}
+          {assessment.positive_protections?.length > 0 && (
+            <div className="risk-detail"><strong>Positive Protections</strong><ul className="evidence-list">{assessment.positive_protections.map((item, index) => <li key={index}>{item}</li>)}</ul></div>
+          )}
+          {assessment.missing_protections?.length > 0 && (
+            <div className="risk-detail"><strong>Missing Protections</strong><ul className="evidence-list">{assessment.missing_protections.map((item, index) => <li key={index}>{item}</li>)}</ul></div>
+          )}
+          {assessment.limitations?.length > 0 && (
+            <div className="risk-detail"><strong>Limitations</strong><ul className="evidence-list">{assessment.limitations.map((item, index) => <li key={index}>{item}</li>)}</ul></div>
+          )}
+        </section>
         <section className="results">
           <h2>
-            {result.filename} - {result.total_clauses} clause
+            CUAD Classification Evidence — {result.filename} - {result.total_clauses} clause
             {result.total_clauses === 1 ? "" : "s"}
           </h2>
           <div className="summary" aria-label="Risk analysis summary">
             <span>Total Clauses: {result.total_clauses}</span>
-            <span>Potential Risks: {result.clauses.filter((c) => c?.risk).length}</span>
-            <span>No Risk Indicator: {result.clauses.filter((c) => !c?.risk && isConfigured(c || {})).length}</span>
-            <span>Supported Categories: {new Set(result.clauses.filter(isConfigured).map((c) => c.clause_type || c.predicted_label)).size}</span>
+            <span>CUAD labels assigned: {result.clauses.filter((c) => c?.predicted_label !== "NO_APPLICABLE_LABEL").length}</span>
+            <span>No applicable CUAD label: {result.clauses.filter((c) => c?.predicted_label === "NO_APPLICABLE_LABEL").length}</span>
           </div>
 
           <ul className="clause-list">
             {result.clauses.map((clause) => (
               <li key={clause.clause_index} className="clause-card">
-                <div className="clause-label">
-                  {clause.clause_type || clause.predicted_label}
-                </div>
-                <div
-                  className={`risk-badge ${
-                    clause.risk ? "risk-badge--risk" : isConfigured(clause) ? "risk-badge--clear" : "risk-badge--unsupported"
-                  }`}
-                >
-                  {riskStatusText(clause)}
-                </div>
-                {clause.risk_type && (
-                  <div className="risk-type">{clause.risk_type}</div>
+                <h3>CUAD Classification</h3>
+                <div className="clause-label">Final CUAD classification: {clause.clause_type || clause.predicted_label}</div>
+                {Array.isArray(clause.candidate_labels) && clause.candidate_labels.length > 0 && (
+                  <div className="risk-detail">
+                    <strong>Candidate labels:</strong> {clause.candidate_labels.join(", ")}
+                  </div>
                 )}
+                <details open={Array.isArray(clause.retrieved_examples) && clause.retrieved_examples.length > 0}>
+                  <summary>CUAD Retrieval Evidence</summary>
+                  <ul className="evidence-list">
+                    {(clause.retrieved_examples || []).map((example, i) => (
+                      <li key={`${example.source_id || example.label || example.clause_type || "evidence"}-${i}`}>
+                        <strong>{example.label || example.clause_type}</strong> - score {example.score}
+                        <div>{example.quote || example.clause_text}</div>
+                      </li>
+                    ))}
+                    {(!clause.retrieved_examples || clause.retrieved_examples.length === 0) && <li>No CUAD retrieval evidence.</li>}
+                  </ul>
+                </details>
                 <p className="clause-text">{clause.clause_text}</p>
-                {clause.reason && (
-                  <div className="risk-detail">
-                    <strong>Reason:</strong> {clause.reason}
-                  </div>
-                )}
-                {clause.evidence && (
-                  <div className="risk-detail">
-                    <strong>Evidence:</strong> {clause.evidence}
-                  </div>
-                )}
-                {clause.source?.name && (
-                  <div className="risk-detail">
-                    <strong>Source:</strong>{" "}
-                    {clause.source.url ? (
-                      <a href={clause.source.url} target="_blank" rel="noreferrer">
-                        {clause.source.name} - {clause.source.title}
-                      </a>
-                    ) : (
-                      `${clause.source.name} - ${clause.source.title}`
-                    )}
-                  </div>
-                )}
-                {clause.legal_knowledge?.length > 0 && (
-                  <details>
-                    <summary>Retrieved legal guidance</summary>
-                    <ul className="guidance-list">
-                      {clause.legal_knowledge.map((item, i) => (
-                        <li key={`${item.source_url}-${i}`}>
-                          <strong>{item.source_name}</strong> — {item.title}
-                          {item.relevance_score != null && ` (score ${item.relevance_score})`}
-                          <div>{item.retrieved_text}</div>
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
-                {Array.isArray(clause.retrieved_labels) && clause.retrieved_labels.length > 0 && (
-                  <details>
-                    <summary>Retrieved evidence</summary>
-                    <ul className="evidence-list">
-                      {clause.retrieved_labels.map((label, i) => (
-                        <li key={i}>
-                          {label} - score {clause.retrieved_scores[i]}
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
               </li>
             ))}
           </ul>
         </section>
+        </>
       )}
     </div>
   );

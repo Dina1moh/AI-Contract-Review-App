@@ -5,7 +5,16 @@ Location: app/models/schemas.py
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+
+ContractRiskStatus = Literal[
+    "COMPLETED",
+    "RISK_ANALYSIS_UNAVAILABLE",
+]
+OverallRisk = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL", "NO_SIGNIFICANT_RISK"]
 
 
 class ClauseResult(BaseModel):
@@ -20,27 +29,42 @@ class ClauseResult(BaseModel):
     )
     retrieved_labels: list[str] = Field(
         default_factory=list,
-        description="Clause types of the top-K retrieved TRAIN examples used as evidence",
+        description="Clause types of the compressed retrieved TRAIN evidence",
     )
     retrieved_scores: list[float] = Field(
         default_factory=list,
-        description="Qdrant similarity scores for the retrieved examples, same order as retrieved_labels",
+        description="Similarity scores for compressed retrieved evidence, same order as retrieved_labels",
     )
-    risk: bool = Field(default=False, description="Potential risk indicator")
-    risk_type: str | None = Field(default=None, description="Potential risk type")
-    reason: str = Field(
-        default="Risk detection was not run for this clause.",
-        description="Risk detector explanation",
-    )
-    evidence: str = Field(default="", description="Exact contract evidence for the indicator")
-    source: dict = Field(
-        default_factory=lambda: {"name": None, "url": None, "title": None},
-        description="Legal guidance source used by the risk detector",
-    )
-    legal_knowledge: list[dict] = Field(
+    candidate_labels: list[str] = Field(
         default_factory=list,
-        description="Retrieved legal guidance metadata and concise snippets",
+        description="Unique CUAD labels offered to the final candidate-constrained classifier",
     )
+    retrieved_examples: list[dict] = Field(
+        default_factory=list,
+        description="At most two deduplicated CUAD evidence items with exact text and score",
+    )
+    classification_status: str | None = Field(
+        default=None,
+        description="Validated classifier outcome, such as VALID_CANDIDATE or FALLBACK_RETRIEVAL",
+    )
+    classification_source: str = Field(default="ollama")
+    fallback_used: bool = Field(default=False)
+    fallback_reason: str | None = Field(default=None)
+    classification_confidence: float | None = Field(default=None)
+    retrieval_status: str = Field(default="ok")
+    retrieval_error: str | None = Field(default=None)
+class ContractRiskAssessment(BaseModel):
+    """Strict contract-level risk report; no risk fields exist on ClauseResult."""
+
+    status: ContractRiskStatus = "RISK_ANALYSIS_UNAVAILABLE"
+    overall_risk: OverallRisk | None = None
+    summary: str = ""
+    risk_domains: list[dict] = Field(default_factory=list)
+    positive_protections: list[str] = Field(default_factory=list)
+    missing_protections: list[str] = Field(default_factory=list)
+    cross_clause_findings: list[dict] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    supporting_legal_guidance: list[dict] = Field(default_factory=list)
 
 
 class ContractClassificationResponse(BaseModel):
@@ -49,6 +73,10 @@ class ContractClassificationResponse(BaseModel):
     filename: str
     total_clauses: int
     clauses: list[ClauseResult]
+    contract_risk_assessment: ContractRiskAssessment = Field(
+        default_factory=dict,
+        description="Evidence-constrained contract-level risk assessment",
+    )
 
 
 class ErrorResponse(BaseModel):

@@ -1,7 +1,6 @@
 """
 Generation stage of the RAG pipeline: deterministic legal-information
-extraction -> prompt (see prompt.py) -> local Qwen 2.5 1.5B via Ollama ->
-one CUAD label.
+extraction -> prompt (see prompt.py) -> local Ollama -> one CUAD label.
 
 classify_clause() is the orchestrator: it ties retrieval (retriever.py)
 together with prompt-building (prompt.py) and generation to classify one
@@ -14,18 +13,20 @@ Location: app/core/rag/generator.py
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
+from difflib import SequenceMatcher
 from typing import Callable
 
 import requests
 from qdrant_client import QdrantClient
 
 from ..config import (
-    OLLAMA_URL,
-    OLLAMA_MODEL,
-    OLLAMA_TIMEOUT_SECONDS,
     OLLAMA_MAX_RETRY_ATTEMPTS,
+    OLLAMA_MODEL,
+    OLLAMA_URL,
+    OLLAMA_TIMEOUT_SECONDS,
     TOP_K,
 )
 from .retriever import retrieve_similar
@@ -41,6 +42,7 @@ __all__ = [
 ]
 
 ProgressCallback = Callable[[dict], None]
+logger = logging.getLogger(__name__)
 
 
 def _emit(callback: ProgressCallback | None, stage: str, message: str, **details) -> None:
@@ -291,43 +293,39 @@ def extract_legal_information(clause_text: str) -> dict[str, list[str]]:
 
 
 # --------------------------------------------------------------------------
-# Local Qwen via Ollama
+# Ollama model gateway
 # --------------------------------------------------------------------------
-def call_ollama(prompt: str) -> str:
-    last_error: Exception | None = None
+def call_ollama(prompt: str, *, model: str | None = None) -> str:
+    selected_model = model or OLLAMA_MODEL
 
+    last_error: Exception | None = None
     for attempt in range(1, OLLAMA_MAX_RETRY_ATTEMPTS + 1):
         try:
             response = requests.post(
                 f"{OLLAMA_URL}/api/generate",
                 json={
-                    "model": OLLAMA_MODEL,
+                    "model": selected_model,
                     "prompt": prompt,
                     "stream": False,
                     "format": "json",
-                    # This machine needs explicit CPU + mmap settings to
-                    # avoid GPU/CPU allocation failures.
-                    "options": {
-                        "temperature": 0,
-                        "num_gpu": 0,
-                        "use_mmap": True,
-                        "num_ctx": 4096,
-                    },
+                    "options": {"temperature": 0},
                 },
                 timeout=OLLAMA_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
-            payload = response.json()
-            return str(payload["response"])
+            content = response.json().get("response")
+            if isinstance(content, str) and content.strip():
+                return content
+            raise RuntimeError("Ollama returned an empty response.")
         except Exception as exc:
             last_error = exc
+            logger.error("Ollama request failed: attempt=%s/%s model=%s error=%s", attempt, OLLAMA_MAX_RETRY_ATTEMPTS, selected_model, str(exc)[:500])
             if attempt < OLLAMA_MAX_RETRY_ATTEMPTS:
-                time.sleep(2 * attempt)
+                time.sleep(2 ** (attempt - 1))
 
     raise RuntimeError(
         "Ollama call failed after "
-        f"{OLLAMA_MAX_RETRY_ATTEMPTS} attempts. "
-        f"Is `ollama serve` running and is '{OLLAMA_MODEL}' pulled?"
+        f"{OLLAMA_MAX_RETRY_ATTEMPTS} attempts for model '{selected_model}'."
     ) from last_error
 
 
@@ -335,14 +333,34 @@ def _canonical_labels(labels: list[str]) -> dict[str, str]:
     return {label.strip().lower(): label for label in labels if str(label).strip()}
 
 
+FORBIDDEN_CLASSIFICATION_OUTPUTS = {
+    "UNKNOWN",
+    "OTHER",
+    "NONE",
+    "UNCLASSIFIED",
+    "NO_MATCH",
+    "NO_LABEL",
+}
+NO_APPLICABLE_LABEL = "NO_APPLICABLE_LABEL"
+MIN_RETRIEVAL_CONFIDENCE = 0.35
+
+
+def _invalid_prediction(status: str, raw_candidate: str | None = None) -> dict[str, str | None]:
+    return {
+        "prediction": None,
+        "status": status,
+        "raw_candidate": raw_candidate,
+    }
+
+
 def parse_prediction_result(
     raw_response: str,
     labels: list[str],
     candidate_labels: list[str] | None = None,
 ) -> dict[str, str | None]:
-    """Validate an Ollama response against the retrieved candidate set."""
+    """Validate a model response against the retrieved candidate set."""
     all_labels = _canonical_labels(labels)
-    candidates = candidate_labels if candidate_labels is not None else labels
+    candidates = candidate_labels or labels
     candidate_map = _canonical_labels(candidates)
     raw_text = str(raw_response or "").strip()
 
@@ -358,30 +376,25 @@ def parse_prediction_result(
                 parsed = None
 
     if not isinstance(parsed, dict) or not isinstance(parsed.get("clause_type"), str):
-        return {
-            "prediction": "UNKNOWN",
-            "status": "MALFORMED_RESPONSE",
-            "raw_candidate": None,
-        }
+        return _invalid_prediction("MALFORMED_RESPONSE")
 
     raw_candidate = parsed["clause_type"].strip()
-    if raw_candidate.upper() in {"UNKNOWN", "NONE"}:
+    normalized = raw_candidate.upper()
+    if normalized == NO_APPLICABLE_LABEL:
         return {
-            "prediction": "UNKNOWN",
-            "status": "UNKNOWN",
+            "prediction": NO_APPLICABLE_LABEL,
+            "status": "NO_APPLICABLE_LABEL",
             "raw_candidate": raw_candidate,
         }
+    if not raw_candidate or normalized in FORBIDDEN_CLASSIFICATION_OUTPUTS:
+        return _invalid_prediction("FORBIDDEN_ABSTENTION", raw_candidate)
 
-    normalized = raw_candidate.lower()
-    if normalized not in all_labels or normalized not in candidate_map:
-        return {
-            "prediction": "UNKNOWN",
-            "status": "OUT_OF_CANDIDATE",
-            "raw_candidate": raw_candidate,
-        }
+    normalized_label = raw_candidate.lower()
+    if normalized_label not in all_labels or normalized_label not in candidate_map:
+        return _invalid_prediction("OUT_OF_CANDIDATE", raw_candidate)
 
     return {
-        "prediction": candidate_map[normalized],
+        "prediction": candidate_map[normalized_label],
         "status": "VALID_CANDIDATE",
         "raw_candidate": raw_candidate,
     }
@@ -391,14 +404,96 @@ def parse_prediction(
     raw_response: str,
     labels: list[str],
     candidate_labels: list[str] | None = None,
+) -> str | None:
+    prediction = parse_prediction_result(
+        raw_response,
+        labels,
+        candidate_labels=candidate_labels,
+    )["prediction"]
+    return str(prediction) if prediction else None
+
+
+def _highest_scoring_retrieved_label(
+    retrieved_examples: list[dict],
+    valid_labels: dict[str, str],
+) -> tuple[str | None, float | None]:
+    ranked: list[tuple[float, str]] = []
+    for example in retrieved_examples:
+        label = valid_labels.get(str(example.get("clause_type") or "").strip().lower())
+        if not label:
+            continue
+        try:
+            score = float(example.get("score"))
+        except (TypeError, ValueError):
+            score = float("-inf")
+        ranked.append((score, label))
+    if not ranked:
+        return None, None
+    score, label = max(ranked, key=lambda item: (item[0], item[1]))
+    return label, score if score != float("-inf") else None
+
+
+def _semantic_fallback_label(
+    clause_text: str,
+    labels: list[str],
+    label_definitions: dict[str, str],
+    extracted_features: dict[str, list[str]],
 ) -> str:
-    return str(
-        parse_prediction_result(
-            raw_response,
-            labels,
-            candidate_labels=candidate_labels,
-        )["prediction"]
+    """Choose deterministically from the full CUAD set when retrieval fails."""
+    clause = str(clause_text or "").lower()
+    feature_text = " ".join(
+        value
+        for values in extracted_features.values()
+        for value in values
+    ).lower()
+    source_text = f"{clause} {feature_text}"
+    source_tokens = set(re.findall(r"[a-z0-9]+", source_text))
+
+    scored: list[tuple[float, str]] = []
+    for label in labels:
+        definition = str(label_definitions.get(label) or "")
+        comparison = f"{label} {definition}".lower()
+        definition_tokens = set(re.findall(r"[a-z0-9]+", comparison))
+        overlap = len(source_tokens & definition_tokens)
+        similarity = SequenceMatcher(None, clause, comparison).ratio()
+        scored.append((overlap * 2.0 + similarity, label))
+
+    return max(scored, key=lambda item: (item[0], item[1]))[1]
+
+
+def _retrieve_with_retry(
+    qdrant_client: QdrantClient,
+    query_vector: list[float],
+    top_k: int,
+    progress_callback: ProgressCallback | None,
+) -> tuple[list[dict], str, str | None]:
+    first_error: Exception | None = None
+    try:
+        retrieved = retrieve_similar(qdrant_client, query_vector, top_k=top_k)
+    except Exception as exc:
+        retrieved = []
+        first_error = exc
+
+    if retrieved:
+        return retrieved, "ok", None
+
+    _emit(
+        progress_callback,
+        "search",
+        "No usable retrieval candidates; retrying CUAD retrieval",
     )
+    retry_top_k = max(top_k + 1, top_k * 2)
+    try:
+        retried = retrieve_similar(qdrant_client, query_vector, top_k=retry_top_k)
+    except Exception as exc:
+        error = str(exc)
+        if first_error:
+            error = f"initial retrieval: {first_error}; retry: {exc}"
+        return [], "error_after_retry", error
+
+    if retried:
+        return retried, "retried_success", None
+    return [], "empty_after_retry", str(first_error) if first_error else None
 
 
 # --------------------------------------------------------------------------
@@ -414,20 +509,29 @@ def classify_clause(
     progress_callback: ProgressCallback | None = None,
 ) -> dict:
     _emit(progress_callback, "search", "Searching similar CUAD examples in Qdrant")
-    retrieved_examples = retrieve_similar(qdrant_client, query_vector, top_k=top_k)
+    valid_labels = _canonical_labels(labels)
+    if not valid_labels:
+        raise RuntimeError("The canonical CUAD label set is empty.")
+
+    retrieved_examples, retrieval_status, retrieval_error = _retrieve_with_retry(
+        qdrant_client,
+        query_vector,
+        top_k,
+        progress_callback,
+    )
     _emit(
         progress_callback,
         "search",
         f"Qdrant search complete ({len(retrieved_examples)} matches)",
         matches=len(retrieved_examples),
     )
-    valid_labels = _canonical_labels(labels)
     candidate_labels: list[str] = []
     for example in retrieved_examples:
         label = str(example.get("clause_type", "")).strip()
         canonical = valid_labels.get(label.lower())
         if canonical and canonical not in candidate_labels:
             candidate_labels.append(canonical)
+    allowed_labels = candidate_labels or list(valid_labels.values())
     extracted_features = extract_legal_information(clause_text)
     prompt = build_prompt(
         clause_text=clause_text,
@@ -435,36 +539,82 @@ def classify_clause(
         labels=labels,
         label_definitions={
             label: label_definitions[label]
-            for label in candidate_labels
+            for label in allowed_labels
             if label in label_definitions
         },
         extracted_features=extracted_features,
-        candidate_labels=candidate_labels,
+        candidate_labels=allowed_labels,
     )
-    _emit(progress_callback, "classification", "Running the local Ollama classifier")
-    raw_response = call_ollama(prompt)
-    prediction_result = parse_prediction_result(
-        raw_response,
-        labels,
-        candidate_labels=candidate_labels,
-    )
-    predicted_label = str(prediction_result["prediction"])
     _emit(
         progress_callback,
         "classification",
-        f"Classification complete: {predicted_label}",
+        f"Classification candidates: {', '.join(allowed_labels)}",
+        candidates=allowed_labels,
+    )
+    _emit(progress_callback, "classification", "Running the local Ollama classifier")
+    raw_response = ""
+    prediction_result: dict[str, str | None] = _invalid_prediction("MODEL_ERROR")
+    for attempt in range(2):
+        try:
+            raw_response = call_ollama(prompt)
+            prediction_result = parse_prediction_result(
+                raw_response,
+                labels,
+                candidate_labels=allowed_labels,
+            )
+        except Exception as exc:
+            prediction_result = _invalid_prediction("MODEL_ERROR", str(exc))
+        if prediction_result["status"] == "VALID_CANDIDATE":
+            break
+        if attempt == 0:
+            _emit(
+                progress_callback,
+                "classification",
+                "Classifier returned an invalid label; reclassifying against the allowed CUAD labels",
+            )
+
+    predicted_label = prediction_result.get("prediction")
+    fallback_used = False
+    fallback_reason = None
+    classifier_source = "ollama"
+    classification_confidence = None
+    _, top_score = _highest_scoring_retrieved_label(retrieved_examples, valid_labels)
+    classification_confidence = top_score
+    if predicted_label not in valid_labels.values():
+        predicted_label = NO_APPLICABLE_LABEL
+        classifier_source = "abstention"
+        fallback_reason = str(prediction_result.get("status") or "invalid_model_response")
+        prediction_status = "NO_APPLICABLE_LABEL"
+    elif top_score is None or top_score < MIN_RETRIEVAL_CONFIDENCE:
+        predicted_label = NO_APPLICABLE_LABEL
+        classifier_source = "low_retrieval_confidence"
+        fallback_reason = f"top_retrieval_score_below_{MIN_RETRIEVAL_CONFIDENCE}"
+        prediction_status = "NO_APPLICABLE_LABEL"
+    else:
+        prediction_status = "VALID_CANDIDATE"
+    _emit(
+        progress_callback,
+        "classification",
+        f"Classification selected: {predicted_label}",
         label=predicted_label,
+        fallback_used=fallback_used,
     )
 
     return {
-        "predicted_label": predicted_label,
+        "predicted_label": str(predicted_label),
         "raw_response": raw_response,
         "retrieved_examples": retrieved_examples,
-        "retrieved_labels": [ex["clause_type"] for ex in retrieved_examples],
-        "retrieved_scores": [round(float(ex["score"]), 4) for ex in retrieved_examples],
-        "candidate_labels": candidate_labels,
-        "prediction_status": prediction_result["status"],
+        "retrieved_labels": [str(ex.get("clause_type") or "") for ex in retrieved_examples],
+        "retrieved_scores": [round(float(ex.get("score", 0.0)), 4) for ex in retrieved_examples],
+        "candidate_labels": allowed_labels,
+        "prediction_status": prediction_status,
         "raw_prediction_candidate": prediction_result["raw_candidate"],
+        "classification_source": classifier_source,
+        "fallback_used": fallback_used,
+        "fallback_reason": fallback_reason,
+        "classification_confidence": classification_confidence,
+        "retrieval_status": retrieval_status,
+        "retrieval_error": retrieval_error,
         "extracted_features": extracted_features,
         "prompt": prompt,
     }

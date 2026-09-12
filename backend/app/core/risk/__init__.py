@@ -1,7 +1,7 @@
-"""Risk detection support for classified contract clauses."""
+"""Contract-level risk assessment support."""
 
 from __future__ import annotations
 
-from .risk_detector import detect_clause_risk
+from .contract_assessor import assess_contract_risk
 
-__all__ = ["detect_clause_risk"]
+__all__ = ["assess_contract_risk"]

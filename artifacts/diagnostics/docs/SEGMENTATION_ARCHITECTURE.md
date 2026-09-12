@@ -8,23 +8,25 @@ analysis -> API/frontend`
 
 PDF files are parsed by Docling. TXT files use the text parser directly. The
 parser returns ordered `DocumentBlock` objects with page ranges and element
-kind (`text` or `table`). The clause segmenter consumes these blocks and never
-parses PDF bytes or PDF coordinates itself.
+kind (`text` or `table`). The clause segmenter consumes these blocks directly;
+it does not flatten the document into one page string before boundary
+detection.
 
 ## Responsibilities
 
 Docling owns PDF reading order, paragraphs, headings, page provenance, layout
-elements, and table extraction. Deterministic logic owns normalization,
-repeated header/footer cleanup, numbering recognition, same-line boundaries,
-multi-line continuation, nested clause relationships, signature metadata
-detection, and validation.
+elements, and table extraction. Deterministic logic owns block-level
+normalization, repeated header/footer cleanup, numbering recognition,
+same-block boundaries, multi-line continuation, nested clause relationships,
+signature metadata detection, diagnostics, and validation.
 
 Regex remains only as a small numbering/structure recognizer. It is not the PDF
 parser and is not run directly against a PDF file.
 
 ## Clause hierarchy
 
-`ClauseNode` is the internal representation:
+`ClauseNode` is the internal representation. It retains source block order and
+page provenance:
 
 ```json
 {
@@ -35,13 +37,17 @@ parser and is not run directly against a PDF file.
   "page_start": 2,
   "page_end": 3,
   "parser": "docling",
+  "source_blocks": [17, 18],
+  "parent_clause": null,
+  "depth": 0,
   "children": [
     {"clause_id": "5(a)", "clause_number": "5(a)", "text": "..."}
   ]
 }
 ```
 
-The service converts nodes to their full normalized `text` values before
+The service converts top-level nodes to their full normalized `text` values
+before
 calling the existing validator, embedder, Qdrant retriever, CUAD classifier,
 and risk detector. Therefore downstream APIs continue to receive
 `clause_text`, `clause_index`, and the existing classification fields.
@@ -58,6 +64,16 @@ is retained only as an explicit compatibility/debug mode.
 The progress stream reports structure extraction, clause-boundary detection,
 validation, embedding, classification, and risk stages without changing the
 frontend protocol.
+
+## Block-native segmentation
+
+`segment_document()` sorts parsed blocks by `order`, normalizes one block at a
+time, detects multiple marker positions inside that block, and appends
+continuation blocks to the active clause. A page break alone never flushes the
+active clause. Table blocks are appended to the active clause unless they
+contain a genuine structural marker. Each boundary can be captured as a
+`BoundaryDiagnostic` with block, page, offset, marker, context, decision, and
+reason.
 
 ## Validation
 

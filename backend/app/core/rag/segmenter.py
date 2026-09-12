@@ -125,7 +125,11 @@ def _is_structural_start(line: str) -> bool:
         return True
     if SECTION_HEADER_RE.match(line):
         return True
-    if NUMBERED_MARKER_RE.match(line) or PAREN_MARKER_RE.match(line):
+    if (
+        NUMBERED_MARKER_RE.match(line)
+        or COMPACT_NUMBERED_MARKER_RE.match(line)
+        or PAREN_MARKER_RE.match(line)
+    ):
         return True
     return _looks_like_all_caps_title(line)
 
@@ -159,6 +163,7 @@ def _marker_for_text(text: str) -> str | None:
         COMPOUND_PAREN_MARKER_RE,
         SECTION_MARKER_RE,
         NUMBERED_MARKER_RE,
+        COMPACT_NUMBERED_MARKER_RE,
         PAREN_MARKER_RE,
     ):
         match = pattern.match(normalized)
@@ -328,6 +333,7 @@ def _enumeration_context(prefix: str) -> bool:
     return bool(
         re.search(r"(?:following|as follows|include|includes|consist(?:s|ing) of)[^:\n]{0,80}:\s*$", lowered)
         or re.search(r"\([a-z]\)\s+", lowered, re.IGNORECASE)
+        or lowered.rstrip().endswith(":")
     )
 
 
@@ -369,7 +375,12 @@ def _split_line_at_markers(line: str) -> list[str]:
     paren_matches = list(PAREN_MARKER_RE.finditer(line))
     if paren_matches:
         first = paren_matches[0]
-        enum_active = first.start() == 0 or _enumeration_context(line[: first.start()])
+        prefix = line[: first.start()]
+        enum_active = (
+            first.start() == 0
+            or _enumeration_context(prefix)
+            or bool(re.match(r"^\s*\d{1,3}\.\s*\S", prefix))
+        )
         if enum_active:
             positions.update(match.start() for match in paren_matches)
 
@@ -440,6 +451,11 @@ def split_into_clauses(raw_text: str) -> list[str]:
             continue
         parts = _split_line_at_markers(line)
         for part_index, part in enumerate(parts):
+            part = re.sub(
+                r"^(\d{1,3}\.)(?=[\"\u201c\u2018'A-Z(])",
+                r"\1 ",
+                part,
+            )
             definition_continuation = bool(
                 current
                 and PAREN_MARKER_RE.match(part)
@@ -466,7 +482,7 @@ def split_into_clauses(raw_text: str) -> list[str]:
         if pending_heading:
             clause = f"{pending_heading} {clause}"
             pending_heading = None
-        if len(clause) < MIN_CLAUSE_CHARS:
+        if len(clause) < MIN_CLAUSE_CHARS and not _is_structural_start(clause):
             continue
         cleaned.extend(_fallback_split_oversized(clause))
 

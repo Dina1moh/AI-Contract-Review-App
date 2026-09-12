@@ -196,13 +196,77 @@ def test_risk_detector_parses_false_response():
     assert result["source"]["name"] == "WorldCC"
 
 
+def test_risk_detector_rejects_non_boolean_risk_response():
+    result = risk_detector.parse_risk_response(
+        '{"risk": "false", "reason": "Looks clear."}',
+        {"name": "WorldCC", "url": "https://example.com", "title": "Termination"},
+    )
+
+    assert result["risk"] is False
+    assert result["risk_status"] == "ERROR"
+
+
+def test_risk_detector_runs_for_unknown_classification(monkeypatch):
+    monkeypatch.setattr(risk_detector, "retrieve_legal_guidance", lambda *a, **k: [])
+    monkeypatch.setattr(
+        risk_detector,
+        "call_ollama",
+        lambda prompt: '{"risk_status":"NO_RISK","risk_type":null,"risk_level":null,"reason":"No evidence-supported risk.","evidence":""}',
+    )
+
+    result = risk_detector.detect_clause_risk(
+        "The clause was not classified.",
+        "UNKNOWN",
+        classification_status="UNKNOWN",
+    )
+
+    assert result["risk"] is False
+    assert result["risk_status"] == "NO_RISK"
+
+
+def test_risk_detector_requires_exact_evidence_for_positive_response(monkeypatch):
+    monkeypatch.setattr(
+        risk_detector,
+        "retrieve_legal_guidance",
+        lambda *args, **kwargs: [
+            {
+                "source_name": "WorldCC",
+                "source_url": "https://example.com",
+                "title": "Liability",
+                "clause_category": "Limitation of Liability",
+                "retrieved_text": "Review uncapped liability wording.",
+                "relevance_score": 0.9,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        risk_detector,
+        "call_ollama",
+        lambda prompt: '{"risk": true, "risk_type": "Potential Risk", "reason": "Review it", "evidence": "not in clause", "source": {}}',
+    )
+
+    result = risk_detector.detect_clause_risk(
+        "Liability is unlimited.",
+        "Uncapped Liability",
+    )
+
+    assert result["risk"] is False
+    assert result["risk_status"] == "INSUFFICIENT_EVIDENCE"
+
+
 def test_detect_clause_risk_false_for_unsupported_clause(monkeypatch):
     monkeypatch.setattr(risk_detector, "retrieve_legal_guidance", lambda *a, **k: [])
+    monkeypatch.setattr(
+        risk_detector,
+        "call_ollama",
+        lambda prompt: '{"risk_status":"NO_RISK","risk_type":null,"risk_level":null,"reason":"No evidence-supported risk.","evidence":""}',
+    )
 
     result = risk_detector.detect_clause_risk("The agreement is governed by New York.", "Governing Law")
 
     assert result["risk"] is False
     assert result["risk_type"] is None
+    assert result["risk_status"] == "NO_RISK"
 
 
 def test_ip_broad_license_fallback_requires_strong_documented_indicator():
@@ -253,13 +317,12 @@ def test_clause_result_response_compatibility_with_existing_fields():
     )
 
     assert result.predicted_label == "Termination For Convenience"
-    assert result.risk is False
-    assert result.source == {"name": None, "url": None, "title": None}
+    assert "risk" not in result.model_dump()
 
 
 def test_documents_classify_response_includes_legacy_and_risk_fields(monkeypatch):
     def fake_classify_contract(file_path):
-        return [
+        return {"clauses": [
             {
                 "clause_index": 0,
                 "clause_text": "Supplier shall indemnify Customer for third-party claims.",
@@ -277,7 +340,7 @@ def test_documents_classify_response_includes_legacy_and_risk_fields(monkeypatch
                     "title": "Negotiating Indemnity",
                 },
             }
-        ]
+        ], "contract_risk_assessment": {"status": "COMPLETED", "overall_risk": "LOW", "summary": "ok"}}
 
     monkeypatch.setattr("app.api.routes.documents.classify_contract", fake_classify_contract)
     client = TestClient(app)
@@ -291,5 +354,5 @@ def test_documents_classify_response_includes_legacy_and_risk_fields(monkeypatch
     clause = response.json()["clauses"][0]
     assert clause["predicted_label"] == "Indemnification"
     assert clause["retrieved_labels"] == ["Indemnification"]
-    assert clause["risk"] is True
-    assert clause["source"]["title"] == "Negotiating Indemnity"
+    assert "risk" not in clause
+    assert response.json()["contract_risk_assessment"]["status"] == "COMPLETED"

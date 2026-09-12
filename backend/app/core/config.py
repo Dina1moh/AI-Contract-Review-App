@@ -86,15 +86,50 @@ if not LEGAL_KNOWLEDGE_PATH.is_absolute():
 
 
 # --------------------------------------------------------------------------
-# Retrieval + local Qwen (Ollama)
+# Retrieval + model providers
 # --------------------------------------------------------------------------
 TOP_K = int(os.getenv("TOP_K", "5"))
 
+CONTRACT_CONTEXT_TOP_K = int(os.getenv("CONTRACT_CONTEXT_TOP_K", "5"))
+
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_MODEL = os.getenv(
+    "OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free"
+)
+OPENROUTER_RISK_MODEL = os.getenv(
+    "OPENROUTER_RISK_MODEL", "nex-agi/nex-n2.5-pro:free"
+)
+OPENROUTER_BASE_URL = os.getenv(
+    "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+).rstrip("/")
+OPENROUTER_TIMEOUT_SECONDS = int(os.getenv("OPENROUTER_TIMEOUT_SECONDS", "120"))
+OPENROUTER_MAX_RETRY_ATTEMPTS = int(os.getenv("OPENROUTER_MAX_RETRY_ATTEMPTS", "3"))
+OPENROUTER_TEMPERATURE = float(os.getenv("OPENROUTER_TEMPERATURE", "0"))
+OPENROUTER_MAX_TOKENS = int(os.getenv("OPENROUTER_MAX_TOKENS", "700"))
+
+
+def openrouter_config_status() -> dict[str, str | bool]:
+    """Return safe provider configuration metadata without exposing secrets."""
+    return {
+        "api_key_configured": bool(OPENROUTER_API_KEY),
+        "model": OPENROUTER_MODEL,
+        "base_url": OPENROUTER_BASE_URL,
+    }
+
+
+def validate_openrouter_configuration(api_key: str | None = None) -> None:
+    """Raise a clear runtime error only when a provider call is requested."""
+    if not (OPENROUTER_API_KEY if api_key is None else api_key):
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is not configured. Set it in the environment "
+            "or in backend/.env before running classification or risk analysis."
+        )
+
 OLLAMA_URL = os.getenv(
     "OLLAMA_URL",
-    os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+    os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
 )
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "60"))
 OLLAMA_MAX_RETRY_ATTEMPTS = int(os.getenv("OLLAMA_MAX_RETRY_ATTEMPTS", "3"))
 

@@ -250,11 +250,10 @@ def build_prompt(
 ) -> str:
     """
     Prompt-tuning notes:
-    - Decision rules are stated explicitly and ordered by priority --
-      Qwen 2.5 1.5B is small enough that vague instructions get ignored.
-    - "Return ONLY a JSON object" + format="json" in the Ollama call
-      (see generator.call_ollama) is a double-enforcement of structured
-      output; either alone was less reliable in testing.
+    - Decision rules are stated explicitly and ordered by priority for the
+      configured local Ollama model.
+    - "Return ONLY a JSON object" is paired with local validation because
+      local Ollama is instructed to return the response schema as JSON.
     - Retrieved examples are framed as "evidence, not automatic answers"
       to discourage the model from just copying the top-1 retrieval hit's
       label without reasoning about the actual clause text.
@@ -263,8 +262,8 @@ def build_prompt(
       exact wording, but keep the final JSON-format instruction intact,
       since that's what response parsing relies on.
     """
-    allowed_labels = candidate_labels if candidate_labels is not None else labels
-    label_list = "\n".join(f"- {label}" for label in allowed_labels) or "- UNKNOWN"
+    allowed_labels = candidate_labels or labels
+    label_list = "\n".join(f"- {label}" for label in allowed_labels)
     example_block = _format_examples(examples) if examples else "None"
     label_definition_block = _format_label_definitions(label_definitions)
     extracted_features_json = json.dumps(
@@ -276,7 +275,7 @@ def build_prompt(
     return f"""You are a legal contract clause classifier for CUAD.
 
 Task:
-Identify the MAIN LEGAL FUNCTION of the clause and select the best-supported category from the retrieved candidates.
+Identify the MAIN LEGAL FUNCTION of the clause and select exactly one label from the allowed CUAD candidates.
 
 Decision rules:
 - Use the clause text, the extracted legal information, the label definitions, and the retrieved training examples together.
@@ -285,15 +284,17 @@ Decision rules:
 - Prefer the primary contractual function when several concepts appear.
 - Do not rely on keyword matching alone.
 - Do not invent facts.
-- Do not invent labels or select a category that is not listed as a candidate.
-- Return exactly one candidate category, or UNKNOWN if none of the candidates is appropriate.
+- Select exactly one allowed CUAD label only when the clause and retrieval evidence support it.
+- If the clause is metadata or the evidence is weak, return {{"clause_type":"NO_APPLICABLE_LABEL"}}.
+- Do not force a label when retrieval confidence is low or the classifier cannot support a candidate.
+- UNKNOWN, OTHER, NONE, UNCLASSIFIED, NO_MATCH, and NO_LABEL are forbidden outputs; use NO_APPLICABLE_LABEL for a safe abstention.
 - Return ONLY a JSON object in this exact format:
-  {{"clause_type": "<one candidate category or UNKNOWN>"}}
+  {{"clause_type": "<one allowed candidate category>"}}
 
 Original clause:
 "{clause_text}"
 
-Candidate categories from retrieved Top-K evidence:
+Allowed candidate CUAD categories:
 {label_list}
 
 CUAD label definitions:

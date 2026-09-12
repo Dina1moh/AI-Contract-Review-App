@@ -42,9 +42,10 @@ Respond with ONLY a JSON object in this exact format, nothing else:
 
 
 def _call_ollama_validator(prompt: str) -> str:
-    """Minimal, low-token Ollama call -- separate from generator.call_ollama
-    because this prompt is much shorter and doesn't need the same
-    num_ctx headroom as the full classification prompt.
+    """Minimal Ollama call reserved for segmentation validation.
+
+    This provider is isolated from final CUAD classification and contract-risk
+    assessment.
     """
     last_error: Exception | None = None
 

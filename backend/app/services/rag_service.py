@@ -6,9 +6,10 @@ Ties together the RAG building blocks in core/rag/ into the full pipeline:
     uploaded contract (PDF/.txt)
         -> structured hybrid parser + contract-aware clause segmenter
         -> embedder.embed_queries          (Cohere, batched)
-        -> per clause: generator.classify_clause
-               (internally calls retriever.retrieve_similar)
-        -> list of labeled clauses, in document order
+        -> per clause: generator.classify_clause (CUAD only)
+        -> compact evidence aggregation
+        -> one contract-level legal-guidance retrieval/risk assessment
+        -> labeled clauses plus contract-level risk report
 
 Route handlers (api/routes/documents.py) call classify_contract() and
 should not talk to core/rag/ directly -- that keeps the HTTP layer free of
@@ -33,7 +34,8 @@ from ..core.rag import (
 from ..core.rag.clause_segmenter import segment_document
 from ..core.rag.segmenter import is_definition
 from ..core.rag.validator import is_real_clause
-from ..core.risk import detect_clause_risk
+from ..core.risk.contract_assessor import assess_contract_risk
+from ..core.risk.evidence_compressor import compress_cuad_evidence
 
 ProgressCallback = Callable[[dict], None]
 _CLASSIFICATION_LOCK = Lock()
@@ -49,35 +51,11 @@ def _emit(
         callback({"type": "progress", "stage": stage, "message": message, **details})
 
 
-def _default_risk(reason: str) -> dict:
-    return {
-        "risk": False,
-        "risk_type": None,
-        "reason": reason,
-        "evidence": "",
-        "source": {"name": None, "url": None, "title": None},
-        "legal_knowledge": [],
-    }
-
-
-def _with_risk_fields(result: dict, risk_result: dict) -> dict:
-    return {
-        **result,
-        "clause_type": result["predicted_label"],
-        "risk": bool(risk_result.get("risk", False)),
-        "risk_type": risk_result.get("risk_type"),
-        "reason": risk_result.get("reason") or "",
-        "evidence": risk_result.get("evidence") or "",
-        "source": risk_result.get("source") or {"name": None, "url": None, "title": None},
-        "legal_knowledge": risk_result.get("legal_knowledge") or [],
-    }
-
-
 def classify_contract(
     file_path: Path,
     top_k: int = TOP_K,
     progress_callback: ProgressCallback | None = None,
-) -> list[dict]:
+) -> dict:
     # Local Qdrant storage is single-owner. Serialize complete analyses so a
     # second upload cannot open the same local collection while the first one
     # is still embedding, searching, or generating results.
@@ -93,13 +71,13 @@ def _classify_contract(
     file_path: Path,
     top_k: int = TOP_K,
     progress_callback: ProgressCallback | None = None,
-) -> list[dict]:
+) -> dict:
     """Run the full pipeline on one uploaded contract file. Returns a list
     of per-clause classification results, in document order.
 
     Raises:
         ValueError: no clauses could be extracted from the document.
-        RuntimeError: an upstream dependency (Cohere, Qdrant, Ollama) failed.
+        RuntimeError: an upstream dependency (Cohere, Qdrant, or model provider) failed.
     """
     _emit(progress_callback, "extract", "Extracting document structure")
     segments = segment_document(file_path)
@@ -145,32 +123,38 @@ def _classify_contract(
     for index, clause_text in enumerate(clauses):
         if segments[index].metadata.get("is_signature_metadata"):
             results.append(
-                _with_risk_fields(
-                    {
+                {
                         "clause_index": index,
                         "clause_text": clause_text,
                         "predicted_label": "DOCUMENT_METADATA",
+                        "clause_type": "DOCUMENT_METADATA",
                         "retrieved_labels": [],
                         "retrieved_scores": [],
-                    },
-                    _default_risk("Signature or document metadata; classification skipped."),
-                )
+                        "classification_status": "NO_APPLICABLE_LABEL",
+                        "classification_source": "metadata_filter",
+                        "fallback_used": False,
+                        "candidate_labels": [],
+                        "retrieved_examples": [],
+                    }
             )
             continue
         if is_real_clause(clause_text):
             validated.append((index, clause_text))
         else:
             results.append(
-                _with_risk_fields(
-                    {
+                {
                         "clause_index": index,
                         "clause_text": clause_text,
-                        "predicted_label": "REJECTED_FRAGMENT",
+                        "predicted_label": "NO_APPLICABLE_LABEL",
+                        "clause_type": "NO_APPLICABLE_LABEL",
                         "retrieved_labels": [],
                         "retrieved_scores": [],
-                    },
-                    _default_risk("Rejected fragment; risk detection was skipped."),
-                )
+                        "classification_status": "NO_APPLICABLE_LABEL",
+                        "classification_source": "validator",
+                        "fallback_used": False,
+                        "candidate_labels": [],
+                        "retrieved_examples": [],
+                    }
             )
 
     if not validated:
@@ -199,6 +183,14 @@ def _classify_contract(
     )
 
     total_validated = len(validated)
+    context_clauses = [
+        {
+            "clause_index": original_index,
+            "clause_text": clause_text,
+            "vector": vector,
+        }
+        for (original_index, clause_text), vector in zip(validated, query_vectors)
+    ]
     for clause_number, ((original_index, clause_text), query_vector) in enumerate(
         zip(validated, query_vectors), start=1
     ):
@@ -210,33 +202,16 @@ def _classify_contract(
             total=total_validated,
             clause_index=original_index,
         )
-        # Defined-term entries (e.g. inside a DEFINITIONS section) have no
-        # matching CUAD label -- classifying them always produces a wrong
-        # guess. Skip the retrieval + LLM call entirely and tag them
-        # directly; cheaper and more accurate than forcing a guess.
+        # Definitions still receive the same clause-level CUAD classification.
         if is_definition(clause_text):
             _emit(
                 progress_callback,
                 "clause",
-                f"Clause {clause_number} is a definition; model calls skipped",
+                f"Clause {clause_number} is a definition; classifying against CUAD candidates",
                 current=clause_number,
                 total=total_validated,
                 clause_index=original_index,
             )
-            results.append(
-                _with_risk_fields(
-                    {
-                        "clause_index": original_index,
-                        "clause_text": clause_text,
-                        "predicted_label": "DEFINITION",
-                        "retrieved_labels": [],
-                        "retrieved_scores": [],
-                    },
-                    _default_risk("Definition entry; risk detection was skipped."),
-                )
-            )
-            continue
-
         result = classify_clause(
             clause_text=clause_text,
             query_vector=query_vector,
@@ -250,25 +225,31 @@ def _classify_contract(
             "clause_index": original_index,
             "clause_text": clause_text,
             "predicted_label": result["predicted_label"],
-            "retrieved_labels": result["retrieved_labels"],
-            "retrieved_scores": result["retrieved_scores"],
+            "retrieved_labels": [],
+            "retrieved_scores": [],
+            "candidate_labels": result.get("candidate_labels", []),
+            "raw_retrieved_labels": result["retrieved_labels"],
+            "raw_retrieved_scores": result["retrieved_scores"],
+            "raw_retrieved_examples": result.get("retrieved_examples", []),
+            "classification_status": result["prediction_status"],
+            "classification_source": result.get("classification_source", "ollama"),
+            "fallback_used": bool(result.get("fallback_used", False)),
+            "fallback_reason": result.get("fallback_reason"),
+            "classification_confidence": result.get("classification_confidence"),
+            "retrieval_status": result.get("retrieval_status", "ok"),
+            "retrieval_error": result.get("retrieval_error"),
         }
-        try:
-            risk_result = detect_clause_risk(
-                clause_text=clause_text,
-                clause_type=result["predicted_label"],
-                cohere_client=cohere_client,
-                qdrant_client=qdrant_client,
-                progress_callback=progress_callback,
-            )
-        except Exception as exc:
-            risk_result = _default_risk(
-                "Risk detection could not run; classification result is still available. "
-                f"Reason: {exc}"
-            )
-        results.append(
-            _with_risk_fields(classification_result, risk_result)
+        compressed_evidence = compress_cuad_evidence(
+            clause_id=original_index,
+            final_label=classification_result["predicted_label"],
+            contract_text=clause_text,
+            retrieved_examples=classification_result["raw_retrieved_examples"],
         )
+        classification_result["compressed_evidence"] = compressed_evidence
+        classification_result["retrieved_examples"] = compressed_evidence
+        classification_result["retrieved_labels"] = [item.get("label") for item in compressed_evidence]
+        classification_result["retrieved_scores"] = [item.get("score") for item in compressed_evidence]
+        results.append(classification_result)
         _emit(
             progress_callback,
             "clause",
@@ -279,5 +260,12 @@ def _classify_contract(
         )
 
     results.sort(key=lambda r: r["clause_index"])
+    _emit(progress_callback, "evidence_aggregation", "Aggregating contract-level CUAD evidence", total=len(results))
+    assessment = assess_contract_risk(
+        results,
+        cohere_client=cohere_client,
+        qdrant_client=qdrant_client,
+        progress_callback=progress_callback,
+    )
     _emit(progress_callback, "complete", "Contract analysis complete", total=len(results))
-    return results
+    return {"clauses": results, "contract_risk_assessment": assessment}

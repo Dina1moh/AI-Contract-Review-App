@@ -126,6 +126,7 @@ def build_guidance_query(clause_text: str, clause_type: str) -> tuple[str, str |
 def _payload_to_result(hit) -> dict:
     payload = hit.payload or {}
     return {
+        "rule_id": payload.get("rule_id") or payload.get("chunk_id"),
         "retrieved_text": payload.get("retrieved_text", ""),
         "source_name": payload.get("source_name"),
         "source_url": payload.get("source_url"),

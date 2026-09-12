@@ -24,6 +24,9 @@ class DocumentBlock:
     page_end: int
     kind: str = "text"
     order: int = 0
+    label: str | None = None
+    parent_ref: str | None = None
+    indent: float | None = None
 
 
 @dataclass
@@ -54,6 +57,26 @@ def _pages(item: object) -> list[int]:
     return result
 
 
+def _docling_label(item: object) -> str | None:
+    value = getattr(item, "label", None)
+    if value is None:
+        return None
+    return str(getattr(value, "value", value))
+
+
+def _docling_parent_ref(item: object) -> str | None:
+    parent = getattr(item, "parent", None)
+    value = getattr(parent, "cref", None)
+    return str(value) if value else None
+
+
+def _docling_indent(item: object) -> float | None:
+    provenance = next(iter(getattr(item, "prov", []) or []), None)
+    bbox = getattr(provenance, "bbox", None)
+    left = getattr(bbox, "l", None)
+    return float(left) if left is not None else None
+
+
 def _docling_document(file_path: Path) -> ParsedDocument:
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions
@@ -77,9 +100,16 @@ def _docling_document(file_path: Path) -> ParsedDocument:
         pages = _pages(item)
         if value and pages:
             label = "table" if order >= len(items) else "text"
-            blocks.append(
-                DocumentBlock(value, min(pages), max(pages), label, order)
-            )
+            blocks.append(DocumentBlock(
+                value,
+                min(pages),
+                max(pages),
+                label,
+                order,
+                _docling_label(item),
+                _docling_parent_ref(item),
+                _docling_indent(item),
+            ))
     return ParsedDocument(sorted(blocks, key=lambda block: block.order), "docling")
 
 
