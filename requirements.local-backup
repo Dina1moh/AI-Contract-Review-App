@@ -1,0 +1,6 @@
+# Core runtime dependencies for the CUAD pipeline scripts.
+pandas
+scikit-learn
+python-dotenv
+cohere
+qdrant-client

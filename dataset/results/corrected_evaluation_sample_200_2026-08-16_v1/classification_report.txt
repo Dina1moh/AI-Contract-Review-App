@@ -1,0 +1,54 @@
+Qwen + RAG Classification Report
+=================================
+
+Total processed rows: 200
+Successful model predictions: 199
+Failed model predictions: 1
+
+Accuracy: 0.703518
+Macro Precision: 0.614919
+Macro Recall: 0.584616
+Macro F1: 0.565142
+
+Per-Class Report
+================
+                                    precision    recall  f1-score   support
+
+        Affiliate License-Licensee       0.00      0.00      0.00         2
+                   Anti-Assignment       0.69      0.75      0.72        12
+                      Audit Rights       1.00      1.00      1.00        18
+                  Cap On Liability       0.67      1.00      0.80         6
+                 Change Of Control       0.50      0.67      0.57         6
+ Competitive Restriction Exception       0.00      0.00      0.00         3
+               Covenant Not To Sue       1.00      1.00      1.00         1
+                       Exclusivity       0.73      0.67      0.70        12
+                     Governing Law       1.00      1.00      1.00        10
+                         Insurance       1.00      0.89      0.94        18
+           Ip Ownership Assignment       1.00      0.67      0.80         6
+  Irrevocable Or Perpetual License       1.00      0.33      0.50         3
+                Joint Ip Ownership       0.67      1.00      0.80         2
+                     License Grant       0.58      0.73      0.65        15
+                Liquidated Damages       1.00      0.50      0.67         2
+                Minimum Commitment       0.89      0.73      0.80        11
+               Most Favored Nation       0.00      0.00      0.00         1
+           No-Solicit Of Customers       0.67      0.67      0.67         3
+           No-Solicit Of Employees       0.00      0.00      0.00         0
+                       Non-Compete       1.00      0.67      0.80         3
+          Non-Transferable License       0.31      0.71      0.43         7
+Notice Period To Terminate Renewal       0.00      0.00      0.00         5
+         Post-Termination Services       0.80      0.44      0.57         9
+                Price Restrictions       0.00      0.00      0.00         0
+                      Renewal Term       0.58      1.00      0.74         7
+            Revenue/Profit Sharing       0.91      0.91      0.91        11
+                    Rofr/Rofo/Rofn       0.50      0.12      0.20         8
+                Source Code Escrow       0.80      1.00      0.89         4
+       Termination For Convenience       0.75      0.50      0.60         6
+           Third Party Beneficiary       1.00      1.00      1.00         1
+                Uncapped Liability       0.00      0.00      0.00         3
+                Volume Restriction       0.25      1.00      0.40         1
+                 Warranty Duration       1.00      0.33      0.50         3
+
+                          accuracy                           0.70       199
+                         macro avg       0.61      0.58      0.57       199
+                      weighted avg       0.73      0.70      0.69       199
+

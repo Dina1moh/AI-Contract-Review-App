@@ -1,0 +1,5 @@
+﻿clause_type,precision,recall,f1_score,support
+Audit Rights,1.0,1.0,1.0,2
+Exclusivity,1.0,1.0,1.0,1
+Ip Ownership Assignment,1.0,1.0,1.0,1
+License Grant,1.0,1.0,1.0,1

@@ -1,0 +1,21 @@
+{
+  "evaluated_clauses": 10,
+  "correct": 7,
+  "incorrect": 3,
+  "accuracy": 0.7,
+  "macro_precision": 0.6,
+  "macro_recall": 0.55,
+  "macro_f1": 0.5666666666666667,
+  "labels": [
+    "Audit Rights",
+    "Change Of Control",
+    "Exclusivity",
+    "Insurance",
+    "Ip Ownership Assignment",
+    "License Grant",
+    "Liquidated Damages",
+    "Minimum Commitment",
+    "Non-Compete",
+    "Non-Transferable License"
+  ]
+}

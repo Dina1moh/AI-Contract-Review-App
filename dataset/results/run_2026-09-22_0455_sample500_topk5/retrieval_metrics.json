@@ -1,0 +1,8 @@
+{
+  "evaluated_clauses": 493,
+  "rag_top1_correct": 320,
+  "rag_top1_accuracy": 0.6490872210953347,
+  "rag_recall_at_3": 0.8377281947261663,
+  "rag_recall_at_5": 0.8823529411764706,
+  "mrr": 0.7486815415821502
+}

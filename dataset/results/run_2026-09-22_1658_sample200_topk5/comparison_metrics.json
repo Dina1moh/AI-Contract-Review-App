@@ -1,0 +1,14 @@
+{
+  "evaluated_clauses": 200,
+  "rag_correct": 129,
+  "model_correct": 136,
+  "both_correct": 103,
+  "rag_correct_model_wrong": 26,
+  "rag_wrong_model_correct": 33,
+  "both_wrong": 38,
+  "model_improvement_cases": 33,
+  "net_correct_gain": 7,
+  "rag_accuracy": 0.645,
+  "model_accuracy": 0.68,
+  "accuracy_gain": 0.03500000000000003
+}

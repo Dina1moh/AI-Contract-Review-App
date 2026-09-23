@@ -1,0 +1,34 @@
+﻿clause_type,precision,recall,f1_score,support
+Affiliate License-Licensee,0.0,0.0,0.0,2
+Anti-Assignment,0.6923076923076923,0.75,0.72,12
+Audit Rights,1.0,1.0,1.0,18
+Cap On Liability,0.6666666666666666,1.0,0.8,6
+Change Of Control,0.5,0.6666666666666666,0.5714285714285714,6
+Competitive Restriction Exception,0.0,0.0,0.0,3
+Covenant Not To Sue,1.0,1.0,1.0,1
+Exclusivity,0.7272727272727273,0.6666666666666666,0.6956521739130435,12
+Governing Law,1.0,1.0,1.0,10
+Insurance,1.0,0.8888888888888888,0.9411764705882353,18
+Ip Ownership Assignment,1.0,0.6666666666666666,0.8,6
+Irrevocable Or Perpetual License,1.0,0.3333333333333333,0.5,3
+Joint Ip Ownership,0.6666666666666666,1.0,0.8,2
+License Grant,0.5789473684210527,0.7333333333333333,0.6470588235294118,15
+Liquidated Damages,1.0,0.5,0.6666666666666666,2
+Minimum Commitment,0.8888888888888888,0.7272727272727273,0.8,11
+Most Favored Nation,0.0,0.0,0.0,1
+No-Solicit Of Customers,0.6666666666666666,0.6666666666666666,0.6666666666666666,3
+No-Solicit Of Employees,0.0,0.0,0.0,0
+Non-Compete,1.0,0.6666666666666666,0.8,3
+Non-Transferable License,0.3125,0.7142857142857143,0.43478260869565216,7
+Notice Period To Terminate Renewal,0.0,0.0,0.0,5
+Post-Termination Services,0.8,0.4444444444444444,0.5714285714285714,9
+Price Restrictions,0.0,0.0,0.0,0
+Renewal Term,0.5833333333333334,1.0,0.7368421052631579,7
+Revenue/Profit Sharing,0.9090909090909091,0.9090909090909091,0.9090909090909091,11
+Rofr/Rofo/Rofn,0.5,0.125,0.2,8
+Source Code Escrow,0.8,1.0,0.8888888888888888,4
+Termination For Convenience,0.75,0.5,0.6,6
+Third Party Beneficiary,1.0,1.0,1.0,1
+Uncapped Liability,0.0,0.0,0.0,3
+Volume Restriction,0.25,1.0,0.4,1
+Warranty Duration,1.0,0.3333333333333333,0.5,3

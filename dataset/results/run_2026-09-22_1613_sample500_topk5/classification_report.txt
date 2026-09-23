@@ -1,0 +1,51 @@
+Qwen + RAG Classification Report
+=================================
+
+Evaluated clauses: 405
+Accuracy: 0.637037
+Macro Precision: 0.434398
+Macro Recall: 0.408817
+Macro F1: 0.399854
+
+Per-Class Classification Report
+================================
+                                    precision    recall  f1-score   support
+
+        Affiliate License-Licensee       0.33      0.40      0.36         5
+        Affiliate License-Licensor       0.00      0.00      0.00         2
+                   Anti-Assignment       0.89      0.91      0.90        34
+                      Audit Rights       0.97      0.97      0.97        38
+                  Cap On Liability       1.00      0.68      0.81        34
+                 Change Of Control       0.58      0.54      0.56        13
+ Competitive Restriction Exception       0.20      0.14      0.17         7
+               Covenant Not To Sue       0.75      0.75      0.75         8
+                       Exclusivity       0.60      0.27      0.38        22
+                     Governing Law       0.96      1.00      0.98        26
+                         Insurance       0.94      0.97      0.96        35
+           Ip Ownership Assignment       0.82      0.60      0.69        15
+  Irrevocable Or Perpetual License       0.00      0.00      0.00        10
+                Joint Ip Ownership       0.71      1.00      0.83         5
+                     License Grant       0.44      0.69      0.53        45
+                Liquidated Damages       0.00      0.00      0.00         2
+                Minimum Commitment       0.88      0.39      0.54        18
+               Most Favored Nation       1.00      0.50      0.67         2
+           No-Solicit Of Customers       0.33      0.50      0.40         2
+           No-Solicit Of Employees       0.18      0.67      0.29         3
+                       Non-Compete       0.67      0.55      0.60        11
+                 Non-Disparagement       0.50      0.67      0.57         3
+          Non-Transferable License       0.19      0.28      0.23        18
+Notice Period To Terminate Renewal       0.00      0.00      0.00         9
+         Post-Termination Services       0.86      0.25      0.39        24
+                Price Restrictions       0.00      0.00      0.00         0
+                      Renewal Term       0.53      0.77      0.62        13
+            Revenue/Profit Sharing       0.00      0.00      0.00         1
+                Source Code Escrow       0.00      0.00      0.00         0
+       Termination For Convenience       0.00      0.00      0.00         0
+                           UNKNOWN       0.00      0.00      0.00         0
+                Volume Restriction       0.00      0.00      0.00         0
+                 Warranty Duration       0.00      0.00      0.00         0
+
+                          accuracy                           0.64       405
+                         macro avg       0.43      0.41      0.40       405
+                      weighted avg       0.70      0.64      0.64       405
+

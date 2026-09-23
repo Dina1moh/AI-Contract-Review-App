@@ -1,0 +1,9 @@
+{
+  "evaluated_clauses": 405,
+  "correct": 258,
+  "incorrect": 147,
+  "accuracy": 0.6370370370370371,
+  "macro_precision": 0.4343983133889237,
+  "macro_recall": 0.4088172192028088,
+  "macro_f1": 0.39985449732335354
+}

@@ -1,0 +1,16 @@
+{
+  "run_name": "run_2026-09-22_1654_sample5_topk5",
+  "created_at": "2026-09-22T16:54:18",
+  "sample": 5,
+  "evaluation_type": "sample",
+  "top_k": 5,
+  "train_data_path": "D:\\peper_AI-legal-contract-review-master\\dataset\\splits\\train\\master_clauses_train.csv",
+  "test_data_path": "D:\\peper_AI-legal-contract-review-master\\dataset\\splits\\test\\master_clauses_test.csv",
+  "embedding_model": "embed-english-v3.0",
+  "qdrant_collection": "cuad_train",
+  "qdrant_path": "D:\\peper_AI-legal-contract-review-master\\dataset\\qdrant_local",
+  "ollama_model": "qwen2.5:1.5b",
+  "ollama_url": "http://localhost:11434",
+  "checkpoint_every": 10,
+  "ollama_timeout_seconds": 180
+}

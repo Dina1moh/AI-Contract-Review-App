@@ -1,0 +1,31 @@
+Qwen + RAG Classification Report
+=================================
+
+Total processed rows: 10
+Successful model predictions: 10
+Failed model predictions: 0
+
+Accuracy: 0.700000
+Macro Precision: 0.600000
+Macro Recall: 0.550000
+Macro F1: 0.566667
+
+Per-Class Report
+================
+                          precision    recall  f1-score   support
+
+            Audit Rights       1.00      1.00      1.00         2
+       Change Of Control       0.00      0.00      0.00         0
+             Exclusivity       1.00      0.50      0.67         2
+               Insurance       1.00      1.00      1.00         1
+ Ip Ownership Assignment       1.00      1.00      1.00         1
+           License Grant       0.00      0.00      0.00         1
+      Liquidated Damages       0.00      0.00      0.00         1
+      Minimum Commitment       1.00      1.00      1.00         1
+             Non-Compete       1.00      1.00      1.00         1
+Non-Transferable License       0.00      0.00      0.00         0
+
+                accuracy                           0.70        10
+               macro avg       0.60      0.55      0.57        10
+            weighted avg       0.80      0.70      0.73        10
+

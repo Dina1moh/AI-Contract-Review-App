@@ -1,0 +1,11 @@
+﻿clause_type,precision,recall,f1_score,support
+Audit Rights,1.0,1.0,1.0,2
+Change Of Control,0.0,0.0,0.0,0
+Exclusivity,1.0,0.5,0.6666666666666666,2
+Insurance,1.0,1.0,1.0,1
+Ip Ownership Assignment,1.0,1.0,1.0,1
+License Grant,0.0,0.0,0.0,1
+Liquidated Damages,0.0,0.0,0.0,1
+Minimum Commitment,1.0,1.0,1.0,1
+Non-Compete,1.0,1.0,1.0,1
+Non-Transferable License,0.0,0.0,0.0,0

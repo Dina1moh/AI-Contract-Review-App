@@ -1,0 +1,3 @@
+﻿Method,Accuracy,Macro Precision,Macro Recall,Macro F1,Weighted Precision,Weighted Recall,Weighted F1,Evaluated Samples,Correct Predictions
+RAG Top-1,0.8,0.625,0.75,0.6666666666666666,0.7,0.8,0.7333333333333333,5,4
+Qwen Model,1.0,1.0,1.0,1.0,1.0,1.0,1.0,5,5
